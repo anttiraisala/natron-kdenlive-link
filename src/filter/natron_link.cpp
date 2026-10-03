@@ -448,7 +448,7 @@ extern "C" mlt_properties natron_link_metadata(mlt_service_type, const char*, vo
   mlt_properties_set(m, "identifier", "natron_link");
   mlt_properties_set(m, "title", "Natron Link");
   mlt_properties_set(m, "version", "1");
-  mlt_properties_set(m, "creator", "kdenlive-natron-bridge");
+  mlt_properties_set(m, "creator", "natron-kdenlive-link");
   mlt_properties_set(m, "license", "GPL-3.0-or-later");
   mlt_properties_set(m, "language", "en");
   mlt_properties_set(m, "description",

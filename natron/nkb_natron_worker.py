@@ -1,4 +1,4 @@
-# nkb_natron_worker.py - the Natron side of kdenlive-natron-bridge.
+# nkb_natron_worker.py - the Natron side of natron-kdenlive-link.
 #
 # Run it INSIDE Natron's Python interpreter (headless, no window):
 #     NatronRenderer -t nkb_natron_worker.py        (tarball install)

@@ -3,7 +3,7 @@
 <effect xmlns="https://www.kdenlive.org" tag="natron_link" id="natron_link">
     <name>Natron Link</name>
     <description>Sends the frames beneath this effect to Natron (through the natron-kdenlive-daemon) and shows the result. If Natron is not available or too slow, the unprocessed frame is shown.</description>
-    <author>kdenlive-natron-bridge</author>
+    <author>natron-kdenlive-link</author>
     <parameter type="url" name="ntp" default="">
         <name>Natron project (.ntp)</name>
         <filter>Natron project (*.ntp)</filter>
