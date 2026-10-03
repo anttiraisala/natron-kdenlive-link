@@ -31,91 +31,254 @@ At about 4 frames per second for a trivial 1080p graph, Natron is the limit, not
 | Natron | 2.5.0 snap (`snap run natron`), and the 2.5.0 tarball headless |
 | MLT headers | MLT 7.40.0, built from source (the AppImage ships 7.41.0, and the filter built against 7.40.0 loads in it) |
 
-**Not supported:** the Kdenlive snap. Its MLT folder is read-only, so the filter cannot be installed there.
+## Folders used in these instructions
 
-## Quick start
+Every command block below starts with a `# Folder:` line that says where it runs, and with a `cd` into that folder, so a block can be pasted into any terminal. The instructions use this layout; if you choose other folders, change the paths in the commands.
 
-### 1. Build and run the tests (no Kdenlive or Natron needed)
+| Folder | Contents |
+|---|---|
+| `~/projects-own/natron-kdenlive-link` | This repository (source, `build/`, and the MLT build in `third-party/`) |
+| `~/apps/kdenlive` | The Kdenlive AppImage and its extracted copy `squashfs-root/` |
+| `~/apps/natron` | Only if you use the Natron tarball instead of the snap |
+| `~/NatronKdenliveLink` | Created by the programs at run time: `config.ini`, `token`, `logs/`, `comps/` (your Natron compositions), `exchange/` |
+
+## Installing Kdenlive (the AppImage is required)
+
+The filter is a shared library that must be copied into Kdenlive's own MLT module folder. That only works when this folder is writable, which is why the install method matters:
+
+| Kdenlive install | Works with the filter? |
+|---|---|
+| **AppImage, extracted** | **Yes. This is the tested and supported way.** |
+| Snap (`snap install kdenlive`) | No. Its MLT folder is read-only. |
+| Flatpak | No. Its MLT folder is read-only inside the sandbox. |
+| Ubuntu package (`apt install kdenlive`) | Not tested. Ubuntu 24.04 ships an old Kdenlive and MLT; the filter would have to be copied into a system folder with `sudo`. |
+
+You can keep another Kdenlive installed next to the AppImage, but only the extracted AppImage started with `AppRun` has the filter. The Kdenlive in your application menu is the other one.
+
+**Create the folder**
+```bash
+# Folder: any
+mkdir -p ~/apps/kdenlive
+```
+
+**Download the AppImage.** If this link no longer works, download the Linux AppImage from https://kdenlive.org/download/ into `~/apps/kdenlive` instead, and use its file name in the next commands.
+```bash
+# Folder: ~/apps/kdenlive
+cd ~/apps/kdenlive
+wget https://download.kde.org/stable/kdenlive/26.08/linux/kdenlive-26.08.1-x86_64.AppImage
+```
+
+**Extract it.** This creates `~/apps/kdenlive/squashfs-root`, a normal writable folder with the whole application. The filter is installed there later.
+```bash
+# Folder: ~/apps/kdenlive
+cd ~/apps/kdenlive
+chmod +x kdenlive-26.08.1-x86_64.AppImage
+./kdenlive-26.08.1-x86_64.AppImage --appimage-extract
+```
+
+**Check it.** This prints the MLT version inside the AppImage (7.41.0 for Kdenlive 26.08.1).
+```bash
+# Folder: any
+ls ~/apps/kdenlive/squashfs-root/usr/lib/libmlt-7.so.*
+```
+
+**Start Kdenlive** always like this, never by running the `.AppImage` file itself (that starts a fresh read-only copy without the filter):
+```bash
+# Folder: any
+~/apps/kdenlive/squashfs-root/AppRun
+```
+
+## Installing Natron
+
+Natron needs no changes, so either install method works. The worker runs inside Natron's own Python with the command `natron -t`. The snap is what the author uses every day; the tarball was tested headless.
+
+### Option A: snap (recommended)
 
 ```bash
+# Folder: any
+sudo snap install natron
+```
+
+```bash
+# Folder: any
+snap list natron
+```
+
+The second command must show version 2.5.0. A snap can only reach non-hidden folders in your home and cannot see other programs' Unix sockets. The defaults handle both: the data folder is `~/NatronKdenliveLink` and the connection is loopback TCP. The Natron GUI is in your application menu, or `snap run natron`.
+
+### Option B: official tarball
+
+```bash
+# Folder: any
+sudo apt install -y libglu1-mesa wget
+```
+
+```bash
+# Folder: any
+mkdir -p ~/apps/natron
+```
+
+```bash
+# Folder: ~/apps/natron
+cd ~/apps/natron
+wget https://github.com/NatronGitHub/Natron/releases/download/v2.5.0/Natron-2.5.0-Linux-x86_64-no-installer.tar.xz
+tar xJf Natron-2.5.0-Linux-x86_64-no-installer.tar.xz
+```
+
+The GUI is `~/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/Natron`. The worker uses `NatronRenderer` from the same folder. A message `Error while loading OpenGL: X11: Failed to open display` when running headless is harmless.
+
+## Building
+
+### 1. Install the build packages
+
+```bash
+# Folder: any
 sudo apt update
 sudo apt install -y build-essential cmake ninja-build git pkg-config libspdlog-dev libfmt-dev libxml2-dev
+```
+
+### 2. Get the source
+
+```bash
+# Folder: ~/projects-own
+mkdir -p ~/projects-own
+cd ~/projects-own
 git clone https://github.com/anttiraisala/natron-kdenlive-link.git
-cd natron-kdenlive-link
+```
+
+Later, to get the newest version: `cd ~/projects-own/natron-kdenlive-link && git pull`, then build again (steps 3 and 5).
+
+### 3. Build and run the tests (no Kdenlive or Natron needed)
+
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-### 2. Build the MLT filter
+Use `-DCMAKE_BUILD_TYPE=Debug` instead of `Release` while developing.
 
-The filter needs MLT 7.40.0 headers. These commands build a minimal MLT into `third-party/` (ignored by git):
+### 4. Build MLT 7.40.0 (needed once, for the filter)
+
+The filter needs MLT 7.40.0 headers. This builds a minimal MLT into `third-party/` inside the repository (ignored by git). It takes a few minutes.
 
 ```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 git clone --branch v7.40.0 --depth 1 https://github.com/mltframework/mlt.git third-party/mlt-src
+```
+
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 cmake -S third-party/mlt-src -B third-party/mlt-src/build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/third-party/mlt-7.40.0" \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/projects-own/natron-kdenlive-link/third-party/mlt-7.40.0" \
   -DBUILD_TESTING=OFF -DGPL=OFF -DGPL3=OFF \
   -DMOD_AVFORMAT=OFF -DMOD_DECKLINK=OFF -DMOD_FREI0R=OFF -DMOD_GDK=OFF -DMOD_GLAXNIMATE_QT6=OFF \
   -DMOD_JACKRACK=OFF -DMOD_KDENLIVE=OFF -DMOD_MOVIT=OFF -DMOD_NDI=OFF -DMOD_NORMALIZE=OFF \
   -DMOD_OLDFILM=OFF -DMOD_OPENCV=OFF -DMOD_OPENFX=OFF -DMOD_PLUS=OFF -DMOD_PLUSGPL=OFF -DMOD_QT6=OFF \
   -DMOD_RESAMPLE=OFF -DMOD_RTAUDIO=OFF -DMOD_RUBBERBAND=OFF -DMOD_RNNOISE=OFF -DMOD_SDL1=OFF \
   -DMOD_SDL2=OFF -DMOD_SOX=OFF -DMOD_SPATIALAUDIO=OFF -DMOD_VIDSTAB=OFF -DMOD_VORBIS=OFF -DMOD_XINE=OFF
+```
+
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 cmake --build third-party/mlt-src/build
 cmake --install third-party/mlt-src/build
 ```
 
-Then rebuild this project with the filter enabled:
+### 5. Build again with the filter
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMLT_ROOT="$PWD/third-party/mlt-7.40.0"
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMLT_ROOT="$HOME/projects-own/natron-kdenlive-link/third-party/mlt-7.40.0"
 cmake --build build
-ctest --test-dir build --output-on-failure        # now includes the filter tests
+ctest --test-dir build --output-on-failure
 ```
 
-### 3. Install the filter into an extracted Kdenlive AppImage
+This now also builds `build/libmltnatron.so` and runs the filter tests (3 tests in total). To also run the Natron worker test, add `-DNATRON_COMMAND="snap run natron"` (or the path of `NatronRenderer`) to the first command; see [docs/DETAILS.md](docs/DETAILS.md) for running it by hand.
+
+## Running
+
+### 1. Install the filter into the extracted Kdenlive
+
+Close Kdenlive first. Repeat this step after every rebuild that changes the filter.
 
 ```bash
-chmod +x kdenlive-26.08.1-x86_64.AppImage
-./kdenlive-26.08.1-x86_64.AppImage --appimage-extract          # creates ./squashfs-root
-tools/install-filter.sh install /path/to/squashfs-root
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+tools/install-filter.sh install ~/apps/kdenlive/squashfs-root
 ```
 
-The script copies `libmltnatron.so` and the effect description into the extracted tree and checks that the AppImage's own `melt` can load the filter. It must print `OK: the AppImage's MLT loaded libmltnatron.so`. Remove it again with `tools/install-filter.sh uninstall /path/to/squashfs-root`.
+It copies `libmltnatron.so` and the effect description into the extracted tree and checks that the AppImage's own `melt` can load the filter. It must print `OK: the AppImage's MLT loaded libmltnatron.so`.
 
-### 4. Try it with the test worker (inverts colors)
+### 2. Try it with the test worker (inverts colors)
 
-Run each command in its own terminal:
+Run each block in its own terminal and leave it running.
 
+**Terminal 1: the daemon**
 ```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 ./build/natron-kdenlive-daemon
-./build/nkb-mock-worker --mode invert --delay-ms 100
-/path/to/squashfs-root/AppRun
 ```
 
-In Kdenlive, search the Effects tab for **Natron Link** (listed under *Misc*), drag it onto a clip, and play. The clip should show inverted colors, after the first pass over each frame.
-
-### 5. Use the real Natron worker
-
-Stop the test worker, then start the Natron worker instead:
-
+**Terminal 2: the test worker**
 ```bash
-snap run natron -t natron/nkb_natron_worker.py        # Natron snap
-NatronRenderer -t natron/nkb_natron_worker.py         # Natron tarball
-./build/natron-kdenlive-cache --status | grep -E "^workers="     # should print workers=1
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+./build/nkb-mock-worker --mode invert --delay-ms 100
 ```
 
-The first time a composition id is used, the worker creates a default pass-through graph `~/NatronKdenliveLink/comps/<comp id>.ntp` (Read node `NKB_Input` connected to Write node `NKB_Output`). Open that file in Natron, add nodes between the two, and save. The worker reloads the file when it changes.
+**Terminal 3: Kdenlive**
+```bash
+# Folder: any
+~/apps/kdenlive/squashfs-root/AppRun
+```
+
+In Kdenlive, search the Effects tab for **Natron Link** (listed under *Misc*), drag it onto a clip, and play. The clip shows inverted colors after the first pass over each frame.
+
+### 3. Use the real Natron worker
+
+Stop the test worker (Ctrl+C in terminal 2), then start the Natron worker in terminal 2 instead. Use the line for your Natron install.
+
+**Terminal 2: Natron worker, snap**
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+snap run natron -t natron/nkb_natron_worker.py
+```
+
+**Terminal 2: Natron worker, tarball**
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+~/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/NatronRenderer -t natron/nkb_natron_worker.py
+```
+
+**Terminal 4: check that the worker is connected** (wait a few seconds after starting it; must print `workers=1`)
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+./build/natron-kdenlive-cache --status | grep -E "^workers="
+```
+
+The first time a composition id is used, the worker creates a default pass-through graph `~/NatronKdenliveLink/comps/<comp id>.ntp` (Read node `NKB_Input` connected to Write node `NKB_Output`). Open that file in the Natron GUI, add nodes between the two, and save. The worker reloads the file when it changes, and Kdenlive shows the new result.
 
 The composition id is the filter's `comp` property, or the file name of its `ntp` property. The easiest way to pick a composition is the **Natron project (.ntp)** file field in the effect panel: choose a file in `~/NatronKdenliveLink/comps/`, and the worker uses it from the next frame on.
 
-### Stopping things
+### Stopping everything
 
 ```bash
-pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; pkill -f nkb_natron_worker
+# Folder: any
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; pkill -f nkb_natron_worker; sleep 1; pgrep -af "natron-kdenlive-daemon|nkb-mock-worker|nkb_natron_worker" || echo "all stopped"
 ```
 
-`-f` is required: `pkill` without it compares only the first 15 characters of a process name and does not match `natron-kdenlive-daemon`. Add `-9` for a process that ignores the signal (Natron and `snap run` can).
+It must print `all stopped`. `-f` is required: `pkill` without it compares only the first 15 characters of a process name and does not match `natron-kdenlive-daemon`. If something is still listed, run the same command with `pkill -9 -f` (Natron and `snap run` can ignore the normal signal).
 
 ## Configuration
 
@@ -146,8 +309,16 @@ All components append to `~/NatronKdenliveLink/logs/natron-kdenlive.log`, one li
 2026-10-02T21:55:21.208Z [debug] [filter] [t=395393] event=filter_frame comp=comp frame=391 size=1920x1080 mode=playback status=timeout result=passthrough total_ms=259.4 key=61fd22c7...
 ```
 
+**Follow the log**
 ```bash
+# Folder: any
 tail -f ~/NatronKdenliveLink/logs/natron-kdenlive.log
+```
+
+**Diagnostics and cache**
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
 ./build/natron-kdenlive-doctor          # configuration, token, addresses, daemon reachability
 ./build/natron-kdenlive-cache --status  # cache and queue statistics
 ./build/natron-kdenlive-cache --clear   # drop all cached frames
@@ -160,7 +331,7 @@ When something fails, the log and the output of `natron-kdenlive-doctor` are eno
 | Symptom | Cause and fix |
 |---|---|
 | Daemon prints `Address already in use` | An old daemon is still running. Stop it with `pkill -f natron-kdenlive-daemon` |
-| "Natron Link" is not in the effects list | Kdenlive needs the module and the effect XML in the extracted AppImage. Re-run `tools/install-filter.sh install ...`; start Kdenlive from `squashfs-root/AppRun`, not the original `.AppImage`. A log line `Invalid metadata for natron_link` means an old module without MLT metadata |
+| "Natron Link" is not in the effects list | Kdenlive needs the module and the effect XML in the extracted AppImage. Re-run `tools/install-filter.sh install ~/apps/kdenlive/squashfs-root`; start Kdenlive with `~/apps/kdenlive/squashfs-root/AppRun`, not the original `.AppImage`. A log line `Invalid metadata for natron_link` means an old module without MLT metadata |
 | Clip looks unprocessed | Check `./build/natron-kdenlive-cache --status`. `workers=0` means no worker is connected, and frames pass through |
 | Export is unprocessed | Look for `export_frame_unprocessed` in the log. Start the worker before rendering, or raise `no_worker_wait_ms` |
 | Natron snap cannot reach files | The snap sees only non-hidden folders in your home. Keep the exchange folder visible (`NKB_EXCHANGE_DIR`) and use `tcp:` addresses |
@@ -223,10 +394,24 @@ The folder [`dev-memos/`](dev-memos/) holds the developer's own working notes. T
 
 ## Uninstall
 
+**Remove the filter from the extracted Kdenlive** (close Kdenlive first)
 ```bash
-tools/install-filter.sh uninstall /path/to/squashfs-root
-sudo cmake --build build --target uninstall      # only if you ran: sudo cmake --install build
-rm -rf ~/NatronKdenliveLink                      # config, token, logs, compositions
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+tools/install-filter.sh uninstall ~/apps/kdenlive/squashfs-root
+```
+
+**Remove installed programs** (only if you ran `sudo cmake --install build`)
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+sudo cmake --build build --target uninstall
+```
+
+**Remove all run-time data** (config, token, logs, and your compositions in `comps/`; back them up first)
+```bash
+# Folder: any
+rm -rf ~/NatronKdenliveLink
 ```
 
 ## License
