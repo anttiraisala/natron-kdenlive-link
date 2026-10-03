@@ -16,6 +16,7 @@
 //   cache_      output cache (internally locked)
 //   queue_ etc. input queue + in-flight map, guarded by qm_
 //   Job         guarded by its own mutex; filters wait on it, workers complete it
+//   launcher_   "Open in Natron" (NatronLauncher, own mutex, own background threads)
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -23,6 +24,8 @@
 #include <condition_variable>
 #include <csignal>
 #include <deque>
+#include <fcntl.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -30,6 +33,12 @@
 #include <unordered_map>
 
 #include <poll.h>
+#include <spawn.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char** environ;
 
 #include "nkb/cache.h"
 #include "nkb/config.h"
@@ -50,6 +59,199 @@ double ms_since(Clock::time_point t) {
 }
 
 enum class Behavior { Pause, BufferSkip, ShowCached };
+
+std::vector<std::string> split_words(const std::string& s) {
+  std::istringstream in(s);
+  std::vector<std::string> v;
+  for (std::string w; in >> w;) v.push_back(w);
+  return v;
+}
+
+std::string join_words(const std::vector<std::string>& v) {
+  std::string s;
+  for (auto& w : v) s += (s.empty() ? "" : " ") + w;
+  return s;
+}
+
+// --------------------------------------------------------- Natron GUI ------
+// "Open in Natron" in the Kdenlive effect arrives as the control command
+// "open_natron <path of the .ntp>". The filter does not start Natron itself: it runs
+// inside Kdenlive, whose AppImage sets library and Qt paths that would break another
+// program (and a snap). The daemon was started from the user's terminal and has a
+// clean environment.
+//
+// For a path that does not exist yet, a pass-through composition is created first by
+// running natron/nkb_new_comp.py headless ([natron] script_command -t ...), then the
+// GUI is started ([natron] gui_command <path>) in its own session, so it keeps running
+// when the daemon stops. A file that is already open in a GUI started by the daemon is
+// not opened a second time. Natron's output goes to <data dir>/logs/natron-gui.log.
+class NatronLauncher {
+ public:
+  void configure(const Config& cfg) {
+    gui_ = split_words(cfg.get("natron", "gui_command"));
+    script_ = split_words(cfg.get("natron", "script_command"));
+    scripts_dir_ = cfg.get("natron", "scripts_dir");
+    if (scripts_dir_.empty()) scripts_dir_ = find_scripts_dir();
+    log_path_ = home_dir() + "/logs/natron-gui.log";
+    mkdir((home_dir() + "/logs").c_str(), 0755);  // may not exist when log_file points elsewhere
+    spdlog::info("event=natron_launcher gui_command=\"{}\" script_command=\"{}\" scripts_dir=\"{}\"",
+                 join_words(gui_), join_words(script_), scripts_dir_);
+  }
+
+  // Validates the request and starts the work in the background, so the control
+  // reply (and with it Kdenlive's GUI thread) is never held up by Natron.
+  // Returns false with *reply = reason for an invalid request.
+  bool request(const std::string& path, uint64_t conn, std::string* reply) {
+    if (path.empty() || path[0] != '/' || path.size() < 5 || path.compare(path.size() - 4, 4, ".ntp") != 0 ||
+        path.find('\n') != std::string::npos) {
+      *reply = "open_natron needs an absolute path of a .ntp file";
+      spdlog::warn("event=natron_open_rejected conn={} path=\"{}\" reason=\"{}\"", conn, path, *reply);
+      return false;
+    }
+    if (gui_.empty()) {
+      *reply = "[natron] gui_command is empty in config.ini";
+      spdlog::warn("event=natron_open_rejected conn={} path=\"{}\" reason=\"{}\"", conn, path, *reply);
+      return false;
+    }
+    std::lock_guard<std::mutex> lk(m_);
+    if (auto it = open_.find(path); it != open_.end()) {
+      *reply = "already_open pid=" + std::to_string(it->second);
+      spdlog::info("event=natron_open_skipped conn={} path=\"{}\" reason=\"already open in Natron\" pid={}", conn,
+                   path, it->second);
+      return true;
+    }
+    open_[path] = 0;  // reserved while the composition is prepared
+    spdlog::info("event=natron_open_requested conn={} path=\"{}\"", conn, path);
+    std::thread([this, path] { work(path); }).detach();
+    *reply = "accepted";
+    return true;
+  }
+
+ private:
+  static std::string find_scripts_dir() {
+    std::vector<std::string> candidates;
+    char exe[4096];
+    const ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n > 0) {
+      exe[n] = 0;
+      std::string dir(exe);
+      dir = dir.substr(0, dir.rfind('/'));
+      candidates.push_back(dir + "/../natron");  // running from <source>/build
+    }
+    candidates.push_back(NKB_SOURCE_DIR "/natron");                    // the source tree it was built from
+    candidates.push_back(NKB_INSTALL_DATADIR "/natron-kdenlive-link/natron");  // cmake --install
+    for (auto& c : candidates) {
+      struct stat st;
+      if (stat((c + "/nkb_new_comp.py").c_str(), &st) == 0) return c;
+    }
+    return candidates.front();
+  }
+
+  // Starts argv in a new session with stdin from /dev/null and stdout/stderr appended
+  // to the Natron log. Returns the pid or -1.
+  pid_t spawn(const std::vector<std::string>& argv, const std::vector<std::string>& extra_env, std::string* err) {
+    std::vector<char*> args;
+    for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
+    args.push_back(nullptr);
+    std::vector<std::string> env_store(extra_env);
+    std::vector<char*> env;
+    for (char** e = environ; *e; ++e) env.push_back(*e);
+    for (auto& e : env_store) env.push_back(const_cast<char*>(e.c_str()));
+    env.push_back(nullptr);
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&fa, 1, log_path_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    sigset_t none, def;
+    sigemptyset(&none);
+    sigemptyset(&def);
+    sigaddset(&def, SIGPIPE);  // the daemon ignores SIGPIPE; Natron gets the default
+    sigaddset(&def, SIGINT);
+    sigaddset(&def, SIGTERM);
+    posix_spawnattr_setsigmask(&at, &none);
+    posix_spawnattr_setsigdefault(&at, &def);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSID | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+    pid_t pid = -1;
+    const int rc = posix_spawnp(&pid, args[0], &fa, &at, args.data(), env.data());
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&at);
+    if (rc != 0) {
+      *err = std::string("cannot start ") + argv[0] + ": " + std::strerror(rc);
+      return -1;
+    }
+    return pid;
+  }
+
+  void forget(const std::string& path) {
+    std::lock_guard<std::mutex> lk(m_);
+    open_.erase(path);
+  }
+
+  void work(const std::string path) {
+    const auto t0 = Clock::now();
+    std::string err;
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+      // 1. Create the pass-through composition headless.
+      std::vector<std::string> argv = script_;
+      argv.push_back("-t");
+      argv.push_back(scripts_dir_ + "/nkb_new_comp.py");
+      if (script_.empty()) {
+        spdlog::error("event=natron_open_failed path=\"{}\" reason=\"[natron] script_command is empty\"", path);
+        return forget(path);
+      }
+      const pid_t pid = spawn(argv, {"NKB_NEW_COMP=" + path}, &err);
+      if (pid < 0) {
+        spdlog::error("event=natron_open_failed path=\"{}\" step=create reason=\"{}\"", path, err);
+        return forget(path);
+      }
+      int status = 0;
+      bool exited = false;
+      for (int i = 0; i < 1200 && !exited; ++i) {  // up to 120 s (the first snap start can be slow)
+        if (waitpid(pid, &status, WNOHANG) == pid) exited = true;
+        else std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      if (!exited) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+      }
+      if (stat(path.c_str(), &st) != 0) {
+        spdlog::error("event=natron_open_failed path=\"{}\" step=create reason=\"{}\" command=\"{}\" see={}", path,
+                      exited ? "the script did not create the file" : "timed out after 120 s", join_words(argv),
+                      log_path_);
+        return forget(path);
+      }
+      spdlog::info("event=natron_comp_created path=\"{}\" ms={:.0f}", path, ms_since(t0));
+    }
+    // 2. Start the GUI on the file.
+    std::vector<std::string> argv = gui_;
+    argv.push_back(path);
+    const pid_t pid = spawn(argv, {}, &err);
+    if (pid < 0) {
+      spdlog::error("event=natron_open_failed path=\"{}\" step=gui reason=\"{}\"", path, err);
+      return forget(path);
+    }
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      open_[path] = pid;
+    }
+    spdlog::info("event=natron_gui_started path=\"{}\" pid={} command=\"{}\"", path, pid, join_words(argv));
+    int status = 0;
+    waitpid(pid, &status, 0);  // this thread lives as long as the Natron window
+    spdlog::info("event=natron_gui_exited path=\"{}\" pid={} status={}", path, pid,
+                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    forget(path);
+  }
+
+  std::mutex m_;
+  std::map<std::string, pid_t> open_;  // path -> pid of its Natron GUI (0 while being prepared)
+  std::vector<std::string> gui_, script_;
+  std::string scripts_dir_, log_path_;
+};
 
 // One render request. Several filters asking for the same key share one Job.
 struct Job {
@@ -106,6 +308,7 @@ class Daemon {
   Config cfg_;
   std::string token_;
   FrameCache cache_;
+  NatronLauncher launcher_;
   Address filter_addr_, worker_addr_;
   Socket filter_listener_, worker_listener_;
   Behavior behavior_ = Behavior::BufferSkip;
@@ -143,6 +346,7 @@ bool Daemon::start(std::string* err) {
     *err = "filter_address and worker_address must differ";
     return false;
   }
+  launcher_.configure(cfg_);
 
   // Cache budget = target clamped into [min, max].
   int64_t target = cfg_.get_int("daemon", "cache_memory_mb");
@@ -416,6 +620,12 @@ bool Daemon::handle_control(Socket& s, const Message& m, uint64_t conn) {
     const auto r = cache_.clear();
     out = "cleared_entries=" + std::to_string(r.entries) + "\ncleared_bytes=" + std::to_string(r.bytes) + "\n";
     spdlog::info("event=cache_cleared conn={} entries={} bytes={}", conn, r.entries, r.bytes);
+  } else if (cmd.rfind("open_natron ", 0) == 0) {
+    if (!launcher_.request(cmd.substr(12), conn, &out)) {
+      Header h = make_header(MsgType::ControlReply);
+      h.status = static_cast<uint16_t>(Status::Error);
+      return send_message(s.fd(), h, out.data(), out.size(), nullptr);
+    }
   } else {
     spdlog::warn("event=unknown_control conn={} cmd=\"{}\"", conn, cmd);
     Header h = make_header(MsgType::ControlReply);

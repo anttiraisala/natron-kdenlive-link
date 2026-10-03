@@ -34,6 +34,19 @@
 //   The file that is hashed into the cache key is always the one named above, so
 //   saving the composition in Natron invalidates the cached frames.
 //
+// KEEP ORIGINAL ALPHA
+//   keep_alpha=1 takes the colours from Natron and the alpha from the original frame.
+//   Applied after the result arrives, so it does not change the cache key.
+//
+// OPEN IN NATRON
+//   Kdenlive effects have no push buttons, so "open_natron" is a checkbox used as a
+//   button: every change of its value (on or off) asks the daemon to open the effect's
+//   composition in the Natron GUI (control command "open_natron <path>"). Changes in the
+//   first 1.5 s of the filter's life are ignored: that is Kdenlive creating the effect or
+//   loading a project, not a click. The melt process (rendering) never opens Natron.
+//   The daemon starts Natron because this module runs inside Kdenlive, whose AppImage
+//   environment would break another program.
+//
 // THREADS
 //   MLT calls get_image from several threads. Each thread keeps its own daemon
 //   connection (thread_local), so no locking is needed on the hot path.
@@ -53,6 +66,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <fcntl.h>
@@ -468,18 +482,75 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
 
   std::vector<uint8_t> out;
   const Answer ans = ask_daemon(p, key, *image, w, h, pos, &out);
-  if (ans.image) std::memcpy(*image, out.data(), out.size());  // replace the frame content
+  const bool keep_alpha = mlt_properties_get_int(props, "keep_alpha") != 0;
+  if (ans.image) {  // replace the frame content
+    if (keep_alpha) {
+      uint8_t* dst = *image;
+      const uint8_t* src = out.data();
+      for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i, dst += 4, src += 4) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];  // dst[3], the original alpha, stays
+      }
+    } else {
+      std::memcpy(*image, out.data(), out.size());
+    }
+  }
 
   const char* result = ans.image ? (ans.cache_hit ? "cache_hit" : "rendered") : "passthrough";
   flog(kDebug,
-       "event=filter_frame comp=%s frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s hash_ms=%.1f total_ms=%.1f key=%s",
+       "event=filter_frame comp=%s frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s keep_alpha=%d hash_ms=%.1f total_ms=%.1f key=%s",
        p.comp.c_str(), static_cast<long long>(pos), w, h, p.export_mode ? "export" : "playback", export_reason,
-       consumer_name.c_str(), real_time_text.c_str(), process.c_str(), to_string(ans.status), result, hash_ms,
+       consumer_name.c_str(), real_time_text.c_str(), process.c_str(), to_string(ans.status), result, keep_alpha ? 1 : 0, hash_ms,
        ms_since(t0), key.hex().c_str());
   if (!ans.image && p.export_mode)
     flog(kError, "event=export_frame_unprocessed comp=%s frame=%lld status=%s reason=\"no processed frame within %d ms; the exported frame is NOT processed\"",
          p.comp.c_str(), static_cast<long long>(pos), to_string(ans.status), p.timeout_ms);
   return 0;
+}
+
+// --------------------------------------------------------- open in Natron -----
+constexpr int64_t kOpenGuardMs = 1500;  // property changes this soon after creation are not clicks
+
+void on_property_changed(mlt_properties props, void* object, mlt_event_data data) {
+  const char* name = mlt_event_data_to_string(data);
+  if (!name || std::strcmp(name, "open_natron") != 0) return;
+  mlt_filter filter = static_cast<mlt_filter>(object);
+  const std::string now = prop_or(props, "open_natron", "0");
+  const std::string last = prop_or(props, "_nkb_open_last", "0");
+  mlt_properties_set(props, "_nkb_open_last", now.c_str());  // '_' properties are not saved
+  if (now == last) return;
+  const int64_t age_ms = now_ms() - mlt_properties_get_int64(props, "_nkb_created_ms");
+  const std::string process = program_invocation_short_name ? program_invocation_short_name : "?";
+  if (age_ms < kOpenGuardMs) {
+    flog(kDebug, "event=open_natron_ignored value=%s age_ms=%lld reason=\"set while the effect was created or loaded\"",
+         now.c_str(), static_cast<long long>(age_ms));
+    return;
+  }
+  if (process.rfind("melt", 0) == 0) {
+    flog(kDebug, "event=open_natron_ignored value=%s reason=\"melt process (rendering)\"", now.c_str());
+    return;
+  }
+  Params p;
+  resolve_comp(filter, &p);
+  const std::string path = p.hash_path;
+  const std::string override_address = prop_or(props, "address", "");
+  flog(kInfo, "event=open_natron_clicked comp=%s path=\"%s\"", p.comp.c_str(), path.c_str());
+  // Talk to the daemon on a separate thread: this runs on Kdenlive's GUI thread.
+  std::thread([path, override_address] {
+    const std::string address = !override_address.empty() ? override_address
+                                : std::getenv("NKB_FILTER_ADDRESS") ? std::getenv("NKB_FILTER_ADDRESS")
+                                                                    : shared().cfg.get("daemon", "filter_address");
+    Address a;
+    std::string token, reply, err;
+    if (!Address::parse(address, &a, &err) || !get_token(&token, false) ||
+        !control_request(a, token, "open_natron " + path, &reply, &err)) {
+      flog(kWarn, "event=open_natron_failed path=\"%s\" reason=\"%s\" hint=\"is natron-kdenlive-daemon running?\"",
+           path.c_str(), err.empty() ? reply.c_str() : err.c_str());
+      return;
+    }
+    flog(kInfo, "event=open_natron_sent path=\"%s\" reply=\"%s\"", path.c_str(), reply.c_str());
+  }).detach();
 }
 
 mlt_frame filter_process(mlt_filter filter, mlt_frame frame) {
@@ -500,6 +571,11 @@ extern "C" mlt_filter filter_natron_link_init(mlt_profile, mlt_service_type, con
   mlt_properties_set(props, "mode", "auto");                 // auto | playback | export
   mlt_properties_set_int(props, "playback_timeout_ms", 250); // wait for a render during playback
   mlt_properties_set_int(props, "export_timeout_ms", 600000);// wait for a render during export
+  mlt_properties_set_int(props, "keep_alpha", 0);            // 1 = colours from Natron, alpha from the clip
+  mlt_properties_set(props, "open_natron", "0");             // checkbox used as a button, see OPEN IN NATRON
+  mlt_properties_set(props, "_nkb_open_last", "0");
+  mlt_properties_set_int64(props, "_nkb_created_ms", now_ms());
+  mlt_events_listen(props, filter, "property-changed", reinterpret_cast<mlt_listener>(on_property_changed));
   flog(kInfo, "event=filter_created");
   return filter;
 }
@@ -559,6 +635,10 @@ extern "C" mlt_properties natron_link_metadata(mlt_service_type, const char*, vo
             "How long to wait for a render during export");
   add_param(params, 5, "address", "Daemon address", "string", "", "Overrides filter_address from config.ini");
   add_param(params, 6, "params", "Extra key data", "string", "", "Text hashed into the cache key");
+  add_param(params, 7, "keep_alpha", "Keep original alpha", "boolean", "0",
+            "Use the colours from Natron and the alpha channel of the original frame");
+  add_param(params, 8, "open_natron", "Open in Natron", "boolean", "0",
+            "Every change of this value opens the composition in the Natron GUI (through the daemon)");
   mlt_properties_set_data(m, "parameters", params, 0, reinterpret_cast<mlt_destructor>(mlt_properties_close), nullptr);
   return m;
 }

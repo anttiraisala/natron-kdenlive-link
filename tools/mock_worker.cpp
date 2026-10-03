@@ -1,7 +1,8 @@
 // nkb-mock-worker - stands in for the Natron worker so the daemon can be
 // tested without Natron. Applies a trivial transform to every job.
 //
-//   --mode passthrough|invert   invert flips the R,G,B bytes of RGBA8 frames
+//   --mode passthrough|invert|invert-all   invert flips the R,G,B bytes of RGBA8 frames,
+//                               invert-all also alpha (like Natron's Invert node by default)
 //   --delay-ms N                simulated render time per frame
 //   --fail-frame N              reply with a worker error for frame N
 //   --hang-frame N              never answer frame N (tests the worker timeout)
@@ -67,11 +68,13 @@ int main(int argc, char** argv) {
       send_message(s.fd(), h, msg.data(), msg.size(), nullptr);
       continue;
     }
-    if (mode == "invert" && m.h.pixel_format == static_cast<uint16_t>(PixelFormat::RGBA8)) {
+    if ((mode == "invert" || mode == "invert-all") && m.h.pixel_format == static_cast<uint16_t>(PixelFormat::RGBA8)) {
+      const bool alpha = mode == "invert-all";
       for (size_t i = 0; i + 3 < m.payload.size(); i += 4) {
         m.payload[i] = 255 - m.payload[i];
         m.payload[i + 1] = 255 - m.payload[i + 1];
         m.payload[i + 2] = 255 - m.payload[i + 2];
+        if (alpha) m.payload[i + 3] = 255 - m.payload[i + 3];
       }
     }
     h.status = static_cast<uint16_t>(Status::Ok);

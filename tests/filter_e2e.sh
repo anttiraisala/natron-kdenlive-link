@@ -23,11 +23,27 @@ filter_address = unix:$ROOT/f.sock
 worker_address = unix:$ROOT/w.sock
 natron_timeout_seconds = 10
 stats_log_interval_seconds = 0
+[natron]
+gui_command = $ROOT/fake_natron_gui.sh
+script_command = $ROOT/fake_natron_script.sh
 [logging]
 level = debug
 log_file = $ROOT/log.txt
 console = false
 EOF
+# Stand-ins for Natron, used by "Open in Natron": they record how they were called.
+# The script creates the composition like nkb_new_comp.py; the GUI stays open for 3 s.
+cat > "$ROOT/fake_natron_script.sh" <<'EOS'
+#!/bin/sh
+echo "script $* NKB_NEW_COMP=$NKB_NEW_COMP" >> "$(dirname "$0")/natron_calls.txt"
+mkdir -p "$(dirname "$NKB_NEW_COMP")" && echo "fake comp" > "$NKB_NEW_COMP"
+EOS
+cat > "$ROOT/fake_natron_gui.sh" <<'EOS'
+#!/bin/sh
+echo "gui $*" >> "$(dirname "$0")/natron_calls.txt"
+sleep 3
+EOS
+chmod +x "$ROOT/fake_natron_script.sh" "$ROOT/fake_natron_gui.sh"
 start_daemon() {
   "$BIN/natron-kdenlive-daemon" > "$ROOT/daemon.out" 2>&1 & DPID=$!; PIDS+=($DPID)
   for _ in $(seq 1 50); do "$BIN/natron-kdenlive-cache" --ping >/dev/null 2>&1 && return 0; sleep 0.1; done
@@ -130,6 +146,43 @@ fi
 grep -q "event=ntp_missing" "$ROOT/log.txt" ; MISSING=$(grep -c "event=ntp_missing" "$ROOT/log.txt")
 [ "$MISSING" -le 1 ] && pass "a missing composition file is logged at most once per path ($MISSING)" || fail "ntp_missing logged $MISSING times"
 kill "$WPID" 2>/dev/null; stop_daemon
+
+echo "== keep original alpha: colours from Natron, alpha from the clip"
+start_daemon; start_worker --mode invert-all
+OUT=$("$CHECK" --frames 2 --start 70 --mode export)
+echo "$OUT" | grep -q "inverted=0 unchanged=0 other=2" && pass "a worker that inverts alpha too changes the alpha (keep_alpha off)" || fail "alpha off: $OUT"
+OUT=$("$CHECK" --frames 2 --start 70 --mode export --keep-alpha)
+echo "$OUT" | grep -q "inverted=2 unchanged=0 other=0" && pass "keep_alpha=1: inverted colours with the original alpha" || fail "keep_alpha: $OUT"
+[ "$(stat_of jobs_completed)" = "2" ] && pass "keep_alpha reuses the cached Natron result (no new render)" || fail "keep_alpha jobs_completed=$(stat_of jobs_completed)"
+kill "$WPID" 2>/dev/null; stop_daemon
+
+echo "== Open in Natron (checkbox used as a button)"
+start_daemon
+: > "$ROOT/log.txt"; rm -f "$ROOT/natron_calls.txt"
+OUT=$("$CHECK" --frames 1 --start 80 --comp "" --ntp "" --mode playback --playback-timeout-ms 0 --clicks 1)
+ID=$(echo "$OUT" | sed -n 's/.*nkb_auto_comp=\(comp-[a-z0-9]*\)$/\1/p' | head -1)
+P="$NKB_HOME/comps/$ID.ntp"
+for _ in $(seq 1 30); do grep -q "^gui" "$ROOT/natron_calls.txt" 2>/dev/null && break; sleep 0.1; done
+grep -q "^script -t .*/natron/nkb_new_comp.py NKB_NEW_COMP=$P\$" "$ROOT/natron_calls.txt" 2>/dev/null \
+   && pass "a missing composition is created first (nkb_new_comp.py, NKB_NEW_COMP=$ID.ntp)" || fail "create step: $(cat "$ROOT/natron_calls.txt" 2>&1)"
+grep -q "^gui $P\$" "$ROOT/natron_calls.txt" 2>/dev/null && pass "the Natron GUI is started on the effect's own composition" || fail "gui step: $(cat "$ROOT/natron_calls.txt" 2>&1)"
+grep -q "event=natron_gui_started" "$ROOT/log.txt" && grep -q "event=open_natron_sent .*reply=\"accepted\"" "$ROOT/log.txt" \
+   && pass "log: open_natron_sent (filter) and natron_gui_started (daemon)" || fail "open log: $(grep -E 'open_natron|natron_' "$ROOT/log.txt" | head -4 | cut -c1-200)"
+: > "$ROOT/natron_calls.txt"
+"$CHECK" --frames 1 --start 80 --ntp "$P" --mode playback --playback-timeout-ms 0 --clicks 2 --click-after-ms 1600 >/dev/null
+[ "$(grep -c '^gui' "$ROOT/natron_calls.txt")" = "0" ] && grep -q "event=natron_open_skipped" "$ROOT/log.txt" \
+   && pass "an already open composition is not opened again" || fail "double open: $(cat "$ROOT/natron_calls.txt")"
+grep -q "^script" "$ROOT/natron_calls.txt" && fail "existing file was re-created" || pass "an existing composition is opened as is, not re-created"
+sleep 3
+: > "$ROOT/log.txt"; : > "$ROOT/natron_calls.txt"
+"$CHECK" --frames 1 --start 80 --ntp "$P" --mode playback --playback-timeout-ms 0 --open-at-start >/dev/null
+sleep 0.5
+[ ! -s "$ROOT/natron_calls.txt" ] && grep -q "event=open_natron_ignored" "$ROOT/log.txt" \
+   && pass "a saved open_natron=1 while loading does not open Natron" || fail "load guard: $(cat "$ROOT/natron_calls.txt")"
+"$MLT_ROOT/bin/melt" color:red out=1 -filter natron_link ntp="$P" open_natron=1 -consumer null >/dev/null 2>&1
+sleep 0.5
+[ ! -s "$ROOT/natron_calls.txt" ] && pass "rendering with melt never opens Natron" || fail "melt opened Natron"
+stop_daemon
 
 echo "== slow worker: playback passes through, later pull is processed"
 start_daemon; start_worker --mode invert --delay-ms 400

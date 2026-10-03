@@ -71,6 +71,17 @@ const Spec kSpecs[] = {
      "Largest single frame accepted (protects against corrupt headers)."},
     {"daemon", "stats_log_interval_seconds", "5", Type::Int, 0, 3600, "",
      "Log a stats line every N seconds. 0 disables."},
+    {"natron", "gui_command", "snap run natron", Type::Str, 0, 0, "",
+     "Command that starts the Natron GUI; the .ntp file is added as the last argument.\n"
+     "# Used by \"Open in Natron\" in the Kdenlive effect. Words are split at spaces (no quoting).\n"
+     "# Tarball example: /home/me/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/Natron"},
+    {"natron", "script_command", "snap run natron", Type::Str, 0, 0, "",
+     "Command that runs a Natron Python script headless; \"-t <script>\" is added.\n"
+     "# Used to create a new pass-through composition before it is opened.\n"
+     "# Tarball example: /home/me/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/NatronRenderer"},
+    {"natron", "scripts_dir", "", Type::Str, 0, 0, "",
+     "Folder of nkb_new_comp.py. Empty = found automatically: the natron/ folder of the source\n"
+     "# tree when the daemon runs from build/, or the installed share/natron-kdenlive-link/natron."},
     {"logging", "level", "debug", Type::Enum, 0, 0, "trace|debug|info|warn|error",
      "Log verbosity. debug logs every frame event."},
     {"logging", "log_file", "", Type::Str, 0, 0, "",

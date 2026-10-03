@@ -8,6 +8,14 @@
         <name>Natron project (.ntp)</name>
         <filter>Natron project (*.ntp)</filter>
     </parameter>
+    <parameter type="bool" name="open_natron" default="0">
+        <name>Open in Natron (click to open)</name>
+        <comment>Every click opens the Natron project above in Natron, creating a pass-through graph first if the file does not exist yet. Needs natron-kdenlive-daemon running.</comment>
+    </parameter>
+    <parameter type="bool" name="keep_alpha" default="0">
+        <name>Keep original alpha</name>
+        <comment>Use the colours from Natron and the alpha (transparency) of the original clip.</comment>
+    </parameter>
     <parameter type="list" name="mode" paramlist="auto;playback;export" default="auto">
         <name>Mode</name>
         <paramlistdisplay>Auto,Playback,Export</paramlistdisplay>
