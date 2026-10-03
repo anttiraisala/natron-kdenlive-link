@@ -10,6 +10,12 @@
  *                     [--consumer-service NAME]   (sets mlt_service on the fake consumer)
  *                     [--playback-timeout-ms T] [--export-timeout-ms T]
  *                     [--comp NAME] [--ntp FILE] [--start F] [--sleep-ms M]
+ *                     [--clear-ntp] [--save-xml FILE]
+ * Then prints the composition properties of the filter:
+ *   props ntp=... comp=... nkb_auto_comp=...
+ * --clear-ntp   afterwards empties "ntp", renders one more frame and prints the props again
+ * --save-xml    finally saves the filtered producer with MLT's xml consumer (as Kdenlive
+ *               saves a project) so a test can check which properties are stored
  */
 #include <framework/mlt.h>
 #include <stdio.h>
@@ -22,6 +28,32 @@ static const char* arg(int argc, char** argv, const char* name, const char* def)
   for (int i = 1; i + 1 < argc; ++i)
     if (!strcmp(argv[i], name)) return argv[i + 1];
   return def;
+}
+
+static void print_props(mlt_properties fp) {
+  const char* ntp = mlt_properties_get(fp, "ntp");
+  const char* comp = mlt_properties_get(fp, "comp");
+  const char* own = mlt_properties_get(fp, "nkb_auto_comp");
+  printf("props ntp=%s comp=%s nkb_auto_comp=%s\n", ntp ? ntp : "", comp ? comp : "", own ? own : "");
+}
+
+static int has_flag(int argc, char** argv, const char* name) {
+  for (int i = 1; i < argc; ++i)
+    if (!strcmp(argv[i], name)) return 1;
+  return 0;
+}
+
+/* Renders one frame of the filtered producer (the extra frame for --clear-ntp). */
+static int render_one(mlt_producer p, int pos, mlt_profile profile) {
+  mlt_producer_seek(p, pos);
+  mlt_frame frame = NULL;
+  if (mlt_service_get_frame(MLT_PRODUCER_SERVICE(p), &frame, 0) || !frame) return 1;
+  uint8_t* img;
+  int w = profile->width, h = profile->height;  /* requested size: must be set before get_image */
+  mlt_image_format fmt = mlt_image_rgba;
+  const int err = mlt_frame_get_image(frame, &img, &fmt, &w, &h, 0);
+  mlt_frame_close(frame);
+  return err;
 }
 
 static mlt_producer make_color(mlt_profile profile, int frames) {
@@ -78,7 +110,8 @@ int main(int argc, char** argv) {
   clock_gettime(CLOCK_MONOTONIC, &t0);
   for (int i = start; i < start + frames; ++i) {
     uint8_t *ri, *fi;
-    int rw, rh, fw, fh;
+    /* mlt_frame_get_image reads width/height as the requested size, so they must be set. */
+    int rw = profile->width, rh = profile->height, fw = profile->width, fh = profile->height;
     mlt_frame rframe, fframe;
     if (get_rgba(ref, i, &ri, &rw, &rh, &rframe)) { fprintf(stderr, "reference frame %d failed\n", i); return 4; }
     mlt_producer_seek(filtered, i);
@@ -103,6 +136,21 @@ int main(int argc, char** argv) {
   clock_gettime(CLOCK_MONOTONIC, &t1);
   long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
   printf("check frames=%d inverted=%d unchanged=%d other=%d elapsed_ms=%ld\n", frames, inverted, unchanged, other, ms);
+  print_props(fp);
+  if (has_flag(argc, argv, "--clear-ntp")) {
+    mlt_properties_set(fp, "ntp", "");
+    if (render_one(filtered, start, profile)) { fprintf(stderr, "extra frame failed\n"); return 4; }
+    print_props(fp);
+  }
+  const char* xml = arg(argc, argv, "--save-xml", "");
+  if (*xml) {
+    mlt_consumer c = mlt_factory_consumer(profile, "xml", xml);
+    if (!c) { fprintf(stderr, "cannot create xml consumer\n"); return 5; }
+    mlt_consumer_connect(c, MLT_PRODUCER_SERVICE(filtered));
+    mlt_consumer_start(c);
+    mlt_consumer_stop(c);
+    mlt_consumer_close(c);
+  }
   mlt_properties_close(fake_consumer);
   mlt_filter_close(f);
   mlt_producer_close(filtered);

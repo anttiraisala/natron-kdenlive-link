@@ -127,11 +127,12 @@ Properties (shown in Kdenlive's effect panel where marked):
 
 | Property | Default | Meaning |
 |---|---|---|
-| `ntp` (panel) | empty | Natron project file. Its content hash is part of the key, so editing it invalidates old frames. The composition id defaults to its file name |
+| `ntp` (panel) | empty | Natron project file. Its content hash is part of the key, so editing it invalidates old frames. The composition id defaults to its file name. When `ntp` and `comp` are both empty, the effect picks its own composition `comp-xxxxxx` on its first frame and sets `ntp` to `<data dir>/comps/comp-xxxxxx.ntp` (log event `comp_assigned`) |
 | `mode` (panel) | `auto` | `auto`, `playback`, `export`. `auto` treats as export: a consumer with `real_time <= 0`, a consumer whose service name starts with `avformat`, or any non-display consumer in the `melt` process |
 | `playback_timeout_ms` (panel) | 250 | Wait for a render during playback; on a timeout the frame passes through and the render finishes in the background |
 | `export_timeout_ms` | 600000 | Wait during export. If no processed frame arrives, an `export_frame_unprocessed` error is logged and the frame is exported unprocessed |
 | `comp`, `address`, `params` | empty | Composition id, daemon address override, extra string hashed into the key (used for parameters in a later milestone) |
+| `nkb_auto_comp` | empty | Set by the filter: the effect's own `comp-xxxxxx`, used again whenever `ntp` is emptied. Saved with the project |
 
 Environment: `NKB_FILTER_ADDRESS` overrides the daemon address, `NKB_LOG_LEVEL` the log level, `NKB_HOME` the data
 directory. The filter appends to the same log file as the daemon with component `[filter]`.

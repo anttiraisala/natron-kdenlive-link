@@ -21,6 +21,19 @@
 //     otherwise playback. Export waits export_timeout_ms for each frame, playback
 //     only playback_timeout_ms. The log line of every frame records which rule fired.
 //
+// COMPOSITION OF AN EFFECT
+//   * "ntp" set (the "Natron project (.ntp)" field in Kdenlive): that file; the
+//     composition id is "comp" if set, otherwise the file name without .ntp.
+//   * "comp" set, "ntp" empty: <data dir>/comps/<comp>.ntp.
+//   * both empty (a freshly added effect): the filter gives the effect its own new
+//     composition "comp-xxxxxx" (6 random letters and digits), remembers it in the
+//     property nkb_auto_comp and sets "ntp" to <data dir>/comps/comp-xxxxxx.ntp.
+//     Both properties are saved with the Kdenlive project. The worker creates that
+//     file as a pass-through graph the first time it renders a frame for it. If the
+//     ntp field is cleared later, the effect goes back to its own comp-xxxxxx.
+//   The file that is hashed into the cache key is always the one named above, so
+//   saving the composition in Natron invalidates the cached frames.
+//
 // THREADS
 //   MLT calls get_image from several threads. Each thread keeps its own daemon
 //   connection (thread_local), so no locking is needed on the hot path.
@@ -32,10 +45,13 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -154,8 +170,19 @@ Key ntp_key(const std::string& path) {
   if (path.empty()) return Key{};
   struct stat st;
   if (stat(path.c_str(), &st) != 0) {
-    flog(kWarn, "event=ntp_missing path=\"%s\" reason=\"%s\"", path.c_str(), strerror(errno));
-    return KeyBuilder().add("missing-ntp").finish();
+    // Normal for a new composition until the worker has created it, so this is
+    // logged once per path and not for every frame.
+    static std::set<std::string> reported;
+    const int err = errno;
+    bool first;
+    {
+      std::lock_guard<std::mutex> lk(m);
+      first = reported.insert(path).second;
+    }
+    if (first)
+      flog(kInfo, "event=ntp_missing path=\"%s\" reason=\"%s\" note=\"the worker creates a missing composition on its first job\"",
+           path.c_str(), strerror(err));
+    return KeyBuilder().add("missing-ntp").add(path).finish();
   }
   std::lock_guard<std::mutex> lk(m);
   auto it = cache.find(path);
@@ -175,6 +202,38 @@ Key ntp_key(const std::string& path) {
   flog(kInfo, "event=ntp_hashed path=\"%s\" bytes=%ld key=%s", path.c_str(), static_cast<long>(st.st_size),
        k.hex().c_str());
   return k;
+}
+
+// -------------------------------------------------------- compositions -----
+// Folder of the compositions. Must match the worker: $NKB_COMPS_DIR, otherwise
+// <data dir>/comps.
+std::string comps_dir() {
+  if (const char* e = std::getenv("NKB_COMPS_DIR"); e && *e) return e;
+  return home_dir() + "/comps";
+}
+
+// File of a composition id, with the same character rules as the worker's
+// CompManager.path(): letters, digits, '-', '_' and '.' are kept, others become '_'.
+std::string comp_file(const std::string& comp) {
+  std::string safe;
+  for (unsigned char c : comp) safe += (std::isalnum(c) || c == '-' || c == '_' || c == '.') ? static_cast<char>(c) : '_';
+  if (safe.empty()) safe = "default";
+  return comps_dir() + "/" + safe + ".ntp";
+}
+
+// "comp-" + 6 random lower-case letters and digits (36^6, about 2 billion names),
+// skipping names whose file already exists.
+std::string new_comp_id() {
+  static const char chars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+  static std::mutex m;
+  static std::mt19937_64 rng{std::random_device{}() ^ static_cast<uint64_t>(Clock::now().time_since_epoch().count())};
+  std::lock_guard<std::mutex> lk(m);
+  for (;;) {
+    std::string id = "comp-";
+    for (int i = 0; i < 6; ++i) id += chars[rng() % 36];
+    struct stat st;
+    if (stat(comp_file(id).c_str(), &st) != 0) return id;
+  }
 }
 
 // ---------------------------------------------------------- connection -----
@@ -239,6 +298,7 @@ void drop_connection(const char* reason) {
 // ----------------------------------------------------------- request -------
 struct Params {
   std::string comp, ntp, address, params;
+  std::string hash_path;  // composition file whose content goes into the cache key
   int timeout_ms = 0;
   bool export_mode = false;
 };
@@ -322,6 +382,31 @@ const char* prop_or(mlt_properties props, const char* name, const char* def) {
   return v && *v ? v : def;
 }
 
+// Decides the composition of this effect (see COMPOSITION OF AN EFFECT at the top)
+// and gives a new effect its own comp-xxxxxx. Runs under the service lock because
+// several MLT threads can render frames of the same effect at the same time.
+void resolve_comp(mlt_filter filter, Params* p) {
+  mlt_properties props = MLT_FILTER_PROPERTIES(filter);
+  mlt_service_lock(MLT_FILTER_SERVICE(filter));
+  p->ntp = prop_or(props, "ntp", "");
+  p->comp = prop_or(props, "comp", "");
+  if (p->ntp.empty() && p->comp.empty()) {
+    std::string own = prop_or(props, "nkb_auto_comp", "");
+    const bool is_new = own.empty();
+    if (is_new) {
+      own = new_comp_id();
+      mlt_properties_set(props, "nkb_auto_comp", own.c_str());
+    }
+    p->ntp = comp_file(own);
+    mlt_properties_set(props, "ntp", p->ntp.c_str());
+    flog(kInfo, "event=comp_assigned comp=%s path=\"%s\" reason=%s", own.c_str(), p->ntp.c_str(),
+         is_new ? "new_effect" : "ntp_cleared");
+  }
+  mlt_service_unlock(MLT_FILTER_SERVICE(filter));
+  if (p->comp.empty()) p->comp = std::filesystem::path(p->ntp).stem().string();
+  p->hash_path = !p->ntp.empty() ? p->ntp : comp_file(p->comp);
+}
+
 int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format, int* width, int* height,
                      int writable) {
   (void)writable;
@@ -335,9 +420,7 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
 
   const auto t0 = Clock::now();
   Params p;
-  p.ntp = prop_or(props, "ntp", "");
-  p.comp = prop_or(props, "comp", "");
-  if (p.comp.empty()) p.comp = p.ntp.empty() ? "comp" : std::filesystem::path(p.ntp).stem().string();
+  resolve_comp(filter, &p);
   p.address = prop_or(props, "address", "");
   p.params = prop_or(props, "params", "");
 
@@ -374,7 +457,7 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
   const Key key = KeyBuilder()
                       .add("nkb-v1")
                       .add(p.comp)
-                      .add_key(ntp_key(p.ntp))
+                      .add_key(ntp_key(p.hash_path))
                       .add(p.params)
                       .add_u64(static_cast<uint64_t>(pos))
                       .add_u64(w)
@@ -412,6 +495,8 @@ extern "C" mlt_filter filter_natron_link_init(mlt_profile, mlt_service_type, con
   mlt_properties props = MLT_FILTER_PROPERTIES(filter);
   mlt_properties_set(props, "ntp", "");                      // path of the Natron project (.ntp)
   mlt_properties_set(props, "comp", "");                     // composition id; default = file name of ntp
+  // nkb_auto_comp is not set here: an effect gets its own comp-xxxxxx when it renders
+  // its first frame with ntp and comp empty (see resolve_comp).
   mlt_properties_set(props, "mode", "auto");                 // auto | playback | export
   mlt_properties_set_int(props, "playback_timeout_ms", 250); // wait for a render during playback
   mlt_properties_set_int(props, "export_timeout_ms", 600000);// wait for a render during export
@@ -465,7 +550,8 @@ extern "C" mlt_properties natron_link_metadata(mlt_service_type, const char*, vo
 
   mlt_properties params = mlt_properties_new();
   add_param(params, 0, "ntp", "Natron project", "string", "", "Path of the Natron project file (.ntp)");
-  add_param(params, 1, "comp", "Composition id", "string", "", "Composition id; defaults to the file name of ntp");
+  add_param(params, 1, "comp", "Composition id", "string", "",
+            "Composition id; defaults to the file name of ntp. With ntp and comp empty the effect gets its own comp-xxxxxx");
   add_param(params, 2, "mode", "Mode", "string", "auto", "auto, playback or export");
   add_param(params, 3, "playback_timeout_ms", "Playback wait (ms)", "integer", "250",
             "How long to wait for a render during playback");

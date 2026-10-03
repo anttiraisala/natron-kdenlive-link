@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.3.2, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.3.3, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -267,9 +267,11 @@ cd ~/projects-own/natron-kdenlive-link
 ./build/natron-kdenlive-cache --status | grep -E "^workers="
 ```
 
-The first time a composition id is used, the worker creates a default pass-through graph `~/NatronKdenliveLink/comps/<comp id>.ntp` (Read node `NKB_Input` connected to Write node `NKB_Output`). Open that file in the Natron GUI, add nodes between the two, and save. The worker reloads the file when it changes, and Kdenlive shows the new result.
+**Each effect gets its own composition.** When a newly added Natron Link effect renders its first frame, it picks a new composition name `comp-xxxxxx` (6 random letters and digits) and sets its **Natron project (.ntp)** field to `~/NatronKdenliveLink/comps/comp-xxxxxx.ntp`. The name is saved with the Kdenlive project. The worker creates that file as a default pass-through graph (Read node `NKB_Input` connected to Write node `NKB_Output`) when it renders the first frame for it. Open the file in the Natron GUI, add nodes between the two, and save. The worker reloads the file when it changes, and Kdenlive shows the new result.
 
-The composition id is the filter's `comp` property, or the file name of its `ntp` property. The easiest way to pick a composition is the **Natron project (.ntp)** file field in the effect panel: choose a file in `~/NatronKdenliveLink/comps/`, and the worker uses it from the next frame on.
+To find out which file belongs to an effect, look for `event=comp_assigned` in the log (`grep comp_assigned ~/NatronKdenliveLink/logs/natron-kdenlive.log`). Kdenlive may show the new path in the effect panel only after the project has been saved and opened again.
+
+**To use another composition**, choose a different file in `~/NatronKdenliveLink/comps/` with the **Natron project (.ntp)** field; the worker uses it from the next frame on. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx`. For now the chosen file must be in `~/NatronKdenliveLink/comps/`: the worker loads `comps/<file name>`, not a file in another folder.
 
 ### Stopping everything
 
@@ -360,6 +362,8 @@ Not verified yet:
 * Only RGBA 8-bit frames are supported so far. The protocol already carries other formats.
 * Natron works on premultiplied data. For semi-transparent pixels, use Unpremult, the effect, then Premult. Color precision drops for very low alpha.
 * Natron 2.5.0 quirks the worker works around: a wrong first render after loading a project (it renders a small throw-away frame), color spaces reset whenever a filename changes (it sets them for every job), failed renders that do not raise errors, and a crash at interpreter exit (the worker exits with `os._exit`).
+* Copying an effect in Kdenlive may copy its composition name too, so both effects share one composition. Choose another file for one of them if that is not wanted.
+* A Natron project file in a folder other than `~/NatronKdenliveLink/comps/` is not supported yet (see "To use another composition" above).
 * A Kdenlive filter attaches to a clip, a track or the master. It cannot add menus, create tracks or act as a true adjustment layer.
 
 ## Roadmap

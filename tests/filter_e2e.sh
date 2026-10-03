@@ -99,6 +99,36 @@ echo "v2" > "$ROOT/comp.ntp"
 "$CHECK" --frames 3 --start 40 --ntp "$ROOT/comp.ntp" --mode export >/dev/null
 AFTER=$(stat_of jobs_completed)
 [ "$BEFORE" = "$SAME" ] && [ "$AFTER" = "$((SAME+3))" ] && pass "unchanged .ntp reuses cache, edited .ntp re-renders" || fail ".ntp keys: $BEFORE $SAME $AFTER"
+
+echo "== a new effect (ntp and comp empty) gets its own composition comp-xxxxxx"
+: > "$ROOT/log.txt"
+OUT=$("$CHECK" --frames 2 --start 50 --comp "" --ntp "" --mode export --save-xml "$ROOT/saved.mlt")
+ID1=$(echo "$OUT" | sed -n 's/.*nkb_auto_comp=\(comp-[a-z0-9]*\)$/\1/p' | head -1)
+echo "$OUT" | grep -q "inverted=2 unchanged=0 other=0" && pass "new effect: frames processed" || fail "new effect: $OUT"
+[[ "$ID1" =~ ^comp-[a-z0-9]{6}$ ]] && pass "new effect got the id $ID1" || fail "no comp-xxxxxx id: $OUT"
+echo "$OUT" | grep -q "props ntp=$NKB_HOME/comps/$ID1.ntp comp= nkb_auto_comp=$ID1" \
+   && pass "ntp property points to comps/$ID1.ntp" || fail "ntp property: $OUT"
+[ "$(grep -c "event=comp_assigned comp=$ID1 .*reason=new_effect" "$ROOT/log.txt")" = "1" ] \
+   && pass "comp_assigned logged once for the effect" || fail "comp_assigned log: $(grep comp_assigned "$ROOT/log.txt" | head -3)"
+grep -q "comp=$ID1 frame=51 .*result=rendered" "$ROOT/log.txt" && pass "frames are sent with comp=$ID1" || fail "comp id on the wire"
+OUT2=$("$CHECK" --frames 1 --start 50 --comp "" --ntp "" --mode export)
+ID2=$(echo "$OUT2" | sed -n 's/.*nkb_auto_comp=\(comp-[a-z0-9]*\)$/\1/p' | head -1)
+[ -n "$ID2" ] && [ "$ID2" != "$ID1" ] && pass "a second effect gets a different id ($ID2)" || fail "second id: $ID1 / $ID2"
+OUT3=$("$CHECK" --frames 1 --start 50 --comp "" --ntp "" --mode export --clear-ntp)
+L1=$(echo "$OUT3" | grep '^props' | sed -n 1p); L2=$(echo "$OUT3" | grep '^props' | sed -n 2p)
+[ -n "$L1" ] && [ "$L1" = "$L2" ] && grep -q "reason=ntp_cleared" "$ROOT/log.txt" \
+   && pass "clearing the ntp field returns the effect to its own comp" || fail "ntp cleared: $OUT3"
+grep -q "nkb_auto_comp\">$ID1<" "$ROOT/saved.mlt" && grep -q "\"ntp\">$NKB_HOME/comps/$ID1.ntp<" "$ROOT/saved.mlt" \
+   && pass "saving through MLT's xml consumer (as Kdenlive does) stores ntp and nkb_auto_comp" || fail "saved xml: $(grep -E 'ntp|auto' "$ROOT/saved.mlt")"
+if [ -x "$MLT_ROOT/bin/melt" ]; then
+  : > "$ROOT/log.txt"
+  "$MLT_ROOT/bin/melt" "$ROOT/saved.mlt" -consumer null real_time=-1 >/dev/null 2>&1
+  grep -q "comp=$ID1 .*result=" "$ROOT/log.txt" && ! grep -q "event=comp_assigned" "$ROOT/log.txt" \
+     && pass "the saved project renders with the same comp (as in a Kdenlive render), no new id" \
+     || fail "reload: $(grep -E 'comp_assigned|filter_frame' "$ROOT/log.txt" | head -2 | cut -c1-200)"
+fi
+grep -q "event=ntp_missing" "$ROOT/log.txt" ; MISSING=$(grep -c "event=ntp_missing" "$ROOT/log.txt")
+[ "$MISSING" -le 1 ] && pass "a missing composition file is logged at most once per path ($MISSING)" || fail "ntp_missing logged $MISSING times"
 kill "$WPID" 2>/dev/null; stop_daemon
 
 echo "== slow worker: playback passes through, later pull is processed"
