@@ -132,8 +132,7 @@ Properties (shown in Kdenlive's effect panel where marked):
 | `playback_timeout_ms` (panel) | 250 | Wait for a render during playback; on a timeout the frame passes through and the render finishes in the background |
 | `export_timeout_ms` | 600000 | Wait during export. If no processed frame arrives, an `export_frame_unprocessed` error is logged and the frame is exported unprocessed |
 | `comp`, `address`, `params` | empty | Composition id, daemon address override, extra string hashed into the key (used for parameters in a later milestone) |
-| `keep_alpha` (panel) | 0 | 1 = colours from Natron, alpha from the original frame. Applied after the result arrives, so the cache key does not change |
-| `open_natron` (panel) | 0 | Checkbox used as a button: every change of its value sends `open_natron <path>` to the daemon, which opens the composition in the Natron GUI (creating a pass-through graph first if the file is missing). Changes in the first 1.5 s after the filter is created (creating the effect, loading a project) and changes in the `melt` process are ignored. Log events: `open_natron_clicked`, `open_natron_sent`, `open_natron_ignored`, `open_natron_failed` (filter); `natron_open_requested`, `natron_comp_created`, `natron_gui_started`, `natron_gui_exited`, `natron_open_skipped`, `natron_open_failed` (daemon). Natron's own output goes to `logs/natron-gui.log` |
+| `open_natron` (panel) | 0 | Checkbox used as a button: every change of its value saves the frame the effect showed last as `<comp>_preview.tga` next to the `.ntp` and sends `open_natron <path>` to the daemon. The daemon starts `gui_command -c <text of natron/nkb_gui_open.py>` with `NKB_OPEN=<path>`; that script, running in the Natron GUI, loads the composition (or creates the pass-through graph), points `NKB_Input` at the preview and `NKB_Output` at `<comp>_output.tga` when it has no file name, and connects the viewer to `NKB_Output` (Natron has no option to run a script after loading a project given on its command line, so the script loads it). A composition already open in a GUI started this way is not opened again; its window is raised with `raise_command <file name>`. Changes in the first 1.5 s after the filter is created (creating the effect, loading a project) and changes in the `melt` process are ignored. Log events: `open_natron_clicked`, `preview_written`, `preview_skipped`, `open_natron_sent`, `open_natron_ignored`, `open_natron_failed` (filter); `natron_open_requested`, `natron_gui_started`, `natron_gui_exited`, `natron_open_skipped`, `natron_raised`, `natron_raise_failed`, `natron_open_failed` (daemon); `NKB_GUI ...` lines in `logs/natron-gui.log` (the script) |
 | `nkb_auto_comp` | empty | Set by the filter: the effect's own `comp-xxxxxx`, used again whenever `ntp` is emptied. Saved with the project |
 
 Environment: `NKB_FILTER_ADDRESS` overrides the daemon address, `NKB_LOG_LEVEL` the log level, `NKB_HOME` the data
@@ -240,9 +239,9 @@ name and the allowed range.
 | `no_worker_wait_ms` | 0 | While no worker is connected, a request waits at most this long; frames are still queued for when a worker connects |
 | `max_frame_mb` | 1024 | Largest accepted frame |
 | `stats_log_interval_seconds` | 5 | Periodic `event=stats` log line, 0 = off |
-| `[natron] gui_command` | `snap run natron` | Starts the Natron GUI; the `.ntp` path is added as the last argument. Words split at spaces, no quoting |
-| `script_command` | `snap run natron` | Runs `nkb_new_comp.py` headless with `-t` to create a missing composition |
-| `scripts_dir` | empty | Folder of `nkb_new_comp.py`. Empty: `<daemon dir>/../natron`, then the source tree the daemon was built from, then the installed `share/natron-kdenlive-link/natron` |
+| `[natron] gui_command` | `snap run natron` | Starts the Natron GUI; `-c <text of nkb_gui_open.py>` is added (the text, not the path, so a snap needs no access to the file). Words split at spaces, no quoting |
+| `raise_command` | `wmctrl -a` | Brings an already open Natron window to the front; the `.ntp` file name (part of Natron's window title) is added. Empty = off |
+| `scripts_dir` | empty | Folder of `nkb_gui_open.py`. Empty: `<daemon dir>/../natron`, then the source tree the daemon was built from, then the installed `share/natron-kdenlive-link/natron` |
 | `[logging] level` | `debug` | `trace`, `debug`, `info`, `warn`, `error` |
 | `log_file` | empty | Empty means `~/NatronKdenliveLink/logs/natron-kdenlive.log` |
 | `console` | `true` | Also log to the terminal |

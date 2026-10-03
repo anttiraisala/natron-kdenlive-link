@@ -72,15 +72,15 @@ const Spec kSpecs[] = {
     {"daemon", "stats_log_interval_seconds", "5", Type::Int, 0, 3600, "",
      "Log a stats line every N seconds. 0 disables."},
     {"natron", "gui_command", "snap run natron", Type::Str, 0, 0, "",
-     "Command that starts the Natron GUI; the .ntp file is added as the last argument.\n"
+     "Command that starts the Natron GUI; \"-c <script>\" is added, the script opens the .ntp.\n"
      "# Used by \"Open in Natron\" in the Kdenlive effect. Words are split at spaces (no quoting).\n"
      "# Tarball example: /home/me/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/Natron"},
-    {"natron", "script_command", "snap run natron", Type::Str, 0, 0, "",
-     "Command that runs a Natron Python script headless; \"-t <script>\" is added.\n"
-     "# Used to create a new pass-through composition before it is opened.\n"
-     "# Tarball example: /home/me/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/NatronRenderer"},
+    {"natron", "raise_command", "wmctrl -a", Type::Str, 0, 0, "",
+     "Brings an already open Natron window to the front when \"Open in Natron\" is clicked again;\n"
+     "# the file name (e.g. comp-abc123.ntp, part of Natron's window title) is added as the last\n"
+     "# argument. wmctrl: sudo apt install wmctrl (X11 desktops). Empty = do not raise."},
     {"natron", "scripts_dir", "", Type::Str, 0, 0, "",
-     "Folder of nkb_new_comp.py. Empty = found automatically: the natron/ folder of the source\n"
+     "Folder of nkb_gui_open.py. Empty = found automatically: the natron/ folder of the source\n"
      "# tree when the daemon runs from build/, or the installed share/natron-kdenlive-link/natron."},
     {"logging", "level", "debug", Type::Enum, 0, 0, "trace|debug|info|warn|error",
      "Log verbosity. debug logs every frame event."},

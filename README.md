@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.4.0, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.4.1, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -271,9 +271,14 @@ cd ~/projects-own/natron-kdenlive-link
 
 The name is picked when the effect renders its first frame, so the timeline cursor has to be over the clip (or the clip has to be played) once. Kdenlive's effect panel does not show the new path right away, because the panel shows its own copy of the values. To see it, switch the effect off and on again with its enable button (observed with Kdenlive 26.08.1). The log also names it: `grep comp_assigned ~/NatronKdenliveLink/logs/natron-kdenlive.log`.
 
-**Alpha matters.** The alpha channel that comes out of the graph is used as is. Several Natron nodes also change alpha by default; for example the **Invert** node inverts R, G, B **and A**, so an opaque clip comes back fully transparent and Kdenlive shows it as black (or shows the track below it). Untick **A** in the Invert node's channel checkboxes to invert only the colors. The same applies to any node whose output looks black: check what it does to alpha. Or tick **Keep original alpha** in the effect panel: the effect then takes the colors from Natron and the alpha from the clip (this hides alpha changes made on purpose, such as keying, so it is off by default).
+**Alpha matters.** The alpha channel that comes out of the graph is used as is. Several Natron nodes also change alpha by default; for example the **Invert** node inverts R, G, B **and A**, so an opaque clip comes back fully transparent and Kdenlive shows it as black (or shows the track below it). Untick **A** in the Invert node's channel checkboxes to invert only the colors. The same applies to any node whose output looks black: check what it does to alpha. This cannot be repaired after the graph: the Invert node's own **(Un)premult** option (on by default) multiplies the inverted colors by the new alpha 0 inside Natron, so the colors are already gone when the frame leaves Natron.
 
-**Open in Natron.** The effect panel has a checkbox **Open in Natron (click to open)**. Kdenlive effects cannot have push buttons, so this checkbox works as one: every click, ticking or unticking, opens the effect's composition (the file in the **Natron project (.ntp)** field, or the effect's own `comp-xxxxxx`) in the Natron GUI. If the file does not exist yet, a pass-through graph is created first. The daemon starts Natron, so it must be running; Natron's window appears on the display of the terminal the daemon was started from. A composition that is already open in a Natron started this way is not opened twice. The two nodes of a new composition lie on top of each other in Natron's Node Graph; drag `NKB_Output` aside once. The commands are set in `config.ini`, see [Configuration](#configuration); for the Natron tarball, change both to the tarball's `Natron` and `NatronRenderer`.
+**Open in Natron.** The effect panel has a checkbox **Open in Natron (click to open)**. Kdenlive effects cannot have push buttons, so this checkbox works as one: every click, ticking or unticking, opens the effect's composition (the file in the **Natron project (.ntp)** field, or the effect's own `comp-xxxxxx`) in the Natron GUI. If the file does not exist yet, a pass-through graph is created first.
+
+* **The clip's current frame is shown in Natron.** On the click the effect saves the frame it showed last as `<comp>_preview.tga` next to the `.ntp`; Natron opens with `NKB_Input` reading that file and a viewer connected to `NKB_Output`. So the effect must have shown a frame first (the timeline cursor over the clip). Natron marks the project as changed (an `*` in the title) because the file names were set; saving keeps them, and the worker uses its own file names for every frame anyway.
+* **A second click brings the open Natron window to the front** instead of opening it twice. This uses `wmctrl` (`sudo apt install wmctrl`; X11 desktops). Without it the click only logs `natron_raise_failed`.
+* The daemon starts Natron, so it must be running; Natron's window appears on the display of the terminal the daemon was started from. Natron's own messages go to `~/NatronKdenliveLink/logs/natron-gui.log`.
+* The command is set in `config.ini`, see [Configuration](#configuration); for the Natron tarball set `gui_command` to the tarball's `Natron`.
 
 **To use another composition**, choose a different file in `~/NatronKdenliveLink/comps/` with the **Natron project (.ntp)** field; the worker uses it from the next frame on. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx`. For now the chosen file must be in `~/NatronKdenliveLink/comps/`: the worker loads `comps/<file name>`, not a file in another folder.
 
@@ -299,14 +304,14 @@ The daemon writes a fully commented `~/NatronKdenliveLink/config.ini` on first s
 | `buffer_behavior` | `buffer_skip` | When the queue is full: `buffer_skip`, `pause` or `show_cached` |
 | `natron_timeout_seconds` | 10 | A worker needing longer for one frame is dropped |
 | `no_worker_wait_ms` | 0 | How long a request waits while no worker is connected |
-| `[natron] gui_command` | `snap run natron` | Starts the Natron GUI for **Open in Natron**; the `.ntp` path is added at the end |
-| `script_command` | `snap run natron` | Runs a Natron Python script headless (`-t script.py`), used to create a new composition |
-| `scripts_dir` | empty | Folder of `nkb_new_comp.py`; empty = found automatically |
+| `[natron] gui_command` | `snap run natron` | Starts the Natron GUI for **Open in Natron** (with `-c <natron/nkb_gui_open.py>`) |
+| `raise_command` | `wmctrl -a` | Brings an open Natron window to the front; the `.ntp` file name is added at the end. Empty = off |
+| `scripts_dir` | empty | Folder of `nkb_gui_open.py`; empty = found automatically |
 | `[logging] level` | `debug` | `trace`, `debug`, `info`, `warn`, `error` |
 
 Only loopback addresses are accepted. Every connection starts with a token handshake; the token is in `~/NatronKdenliveLink/token` (mode 0600). Loopback TCP is the default because a snap cannot see another snap's Unix sockets.
 
-Filter properties (set in Kdenlive's effect panel or the project file): `ntp`, `comp`, `mode` (`auto`, `playback`, `export`), `playback_timeout_ms` (250), `export_timeout_ms` (600000), `keep_alpha` (0), `open_natron` (the "button"). In `auto` mode a frame is treated as an export when it is rendered by the `melt` process, which is how Kdenlive renders.
+Filter properties (set in Kdenlive's effect panel or the project file): `ntp`, `comp`, `mode` (`auto`, `playback`, `export`), `playback_timeout_ms` (250), `export_timeout_ms` (600000), `open_natron` (the "button"). In `auto` mode a frame is treated as an export when it is rendered by the `melt` process, which is how Kdenlive renders.
 
 The complete reference, the wire protocol and the Natron findings are in [docs/DETAILS.md](docs/DETAILS.md).
 

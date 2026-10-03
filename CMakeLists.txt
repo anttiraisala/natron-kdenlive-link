@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(natron_kdenlive_link VERSION 0.4.0 LANGUAGES C CXX)
+project(natron_kdenlive_link VERSION 0.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,7 +35,7 @@ target_link_libraries(nkb_log PUBLIC nkb_base spdlog::spdlog)
 
 add_executable(natron-kdenlive-daemon src/daemon.cpp)
 target_link_libraries(natron-kdenlive-daemon PRIVATE nkb_log)
-# Where an installed daemon finds natron/nkb_new_comp.py ("Open in Natron").
+# Where an installed daemon finds natron/nkb_gui_open.py ("Open in Natron").
 target_compile_definitions(natron-kdenlive-daemon PRIVATE NKB_INSTALL_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}"
                                                      NKB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
@@ -53,7 +53,7 @@ target_link_libraries(nkb-mock-filter PRIVATE nkb_log)
 
 install(TARGETS natron-kdenlive-daemon natron-kdenlive-cache natron-kdenlive-doctor
         RUNTIME DESTINATION bin)
-install(FILES natron/nkb_natron_worker.py natron/nkb_new_comp.py
+install(FILES natron/nkb_natron_worker.py natron/nkb_gui_open.py
         DESTINATION ${CMAKE_INSTALL_DATADIR}/natron-kdenlive-link/natron)
 
 # ---- MLT filter module (milestone 2) -------------------------------------

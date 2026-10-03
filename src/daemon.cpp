@@ -25,6 +25,7 @@
 #include <csignal>
 #include <deque>
 #include <fcntl.h>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -80,22 +81,24 @@ std::string join_words(const std::vector<std::string>& v) {
 // program (and a snap). The daemon was started from the user's terminal and has a
 // clean environment.
 //
-// For a path that does not exist yet, a pass-through composition is created first by
-// running natron/nkb_new_comp.py headless ([natron] script_command -t ...), then the
-// GUI is started ([natron] gui_command <path>) in its own session, so it keeps running
-// when the daemon stops. A file that is already open in a GUI started by the daemon is
-// not opened a second time. Natron's output goes to <data dir>/logs/natron-gui.log.
+// The GUI is started as [natron] gui_command -c <text of natron/nkb_gui_open.py> with
+// NKB_OPEN=<path>, in its own session so it keeps running when the daemon stops. The
+// script creates a missing composition (pass-through graph), shows the preview frame
+// the filter saved and connects a viewer. A file that is already open in a GUI started
+// by the daemon is not opened a second time; its window is brought to the front instead
+// ([natron] raise_command <file name>, wmctrl by default: Natron's window title starts
+// with the file name). Natron's output goes to <data dir>/logs/natron-gui.log.
 class NatronLauncher {
  public:
   void configure(const Config& cfg) {
     gui_ = split_words(cfg.get("natron", "gui_command"));
-    script_ = split_words(cfg.get("natron", "script_command"));
+    raise_ = split_words(cfg.get("natron", "raise_command"));
     scripts_dir_ = cfg.get("natron", "scripts_dir");
     if (scripts_dir_.empty()) scripts_dir_ = find_scripts_dir();
     log_path_ = home_dir() + "/logs/natron-gui.log";
     mkdir((home_dir() + "/logs").c_str(), 0755);  // may not exist when log_file points elsewhere
-    spdlog::info("event=natron_launcher gui_command=\"{}\" script_command=\"{}\" scripts_dir=\"{}\"",
-                 join_words(gui_), join_words(script_), scripts_dir_);
+    spdlog::info("event=natron_launcher gui_command=\"{}\" raise_command=\"{}\" scripts_dir=\"{}\"",
+                 join_words(gui_), join_words(raise_), scripts_dir_);
   }
 
   // Validates the request and starts the work in the background, so the control
@@ -118,6 +121,7 @@ class NatronLauncher {
       *reply = "already_open pid=" + std::to_string(it->second);
       spdlog::info("event=natron_open_skipped conn={} path=\"{}\" reason=\"already open in Natron\" pid={}", conn,
                    path, it->second);
+      if (it->second > 0) raise_window(path);
       return true;
     }
     open_[path] = 0;  // reserved while the composition is prepared
@@ -142,7 +146,7 @@ class NatronLauncher {
     candidates.push_back(NKB_INSTALL_DATADIR "/natron-kdenlive-link/natron");  // cmake --install
     for (auto& c : candidates) {
       struct stat st;
-      if (stat((c + "/nkb_new_comp.py").c_str(), &st) == 0) return c;
+      if (stat((c + "/nkb_gui_open.py").c_str(), &st) == 0) return c;
     }
     return candidates.front();
   }
@@ -186,60 +190,62 @@ class NatronLauncher {
     return pid;
   }
 
+  // Runs raise_command <file name> in the background; its exit status says whether a
+  // window was found (wmctrl: 0 = raised, 1 = no window with that title).
+  void raise_window(const std::string& path) {
+    if (raise_.empty()) return;
+    std::vector<std::string> argv = raise_;
+    argv.push_back(path.substr(path.rfind('/') + 1));
+    std::string err;
+    const pid_t pid = spawn(argv, {}, &err);
+    if (pid < 0) {
+      spdlog::warn("event=natron_raise_failed path=\"{}\" reason=\"{}\" hint=\"sudo apt install wmctrl, or set "
+                   "[natron] raise_command\"", path, err);
+      return;
+    }
+    std::thread([pid, path, argv] {
+      int status = 0;
+      waitpid(pid, &status, 0);
+      const int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+      if (rc == 0) spdlog::info("event=natron_raised path=\"{}\"", path);
+      else spdlog::warn("event=natron_raise_failed path=\"{}\" status={} command=\"{}\"", path, rc, join_words(argv));
+    }).detach();
+  }
+
   void forget(const std::string& path) {
     std::lock_guard<std::mutex> lk(m_);
     open_.erase(path);
   }
 
   void work(const std::string path) {
-    const auto t0 = Clock::now();
+    // The GUI runs natron/nkb_gui_open.py, passed as text with -c so that a snap does not
+    // need to read the file: it loads (or creates) the composition, points NKB_Input at the
+    // preview frame and connects a viewer. Natron cannot run a script after loading a
+    // project given on its command line, so the script loads it.
     std::string err;
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0) {
-      // 1. Create the pass-through composition headless.
-      std::vector<std::string> argv = script_;
-      argv.push_back("-t");
-      argv.push_back(scripts_dir_ + "/nkb_new_comp.py");
-      if (script_.empty()) {
-        spdlog::error("event=natron_open_failed path=\"{}\" reason=\"[natron] script_command is empty\"", path);
-        return forget(path);
-      }
-      const pid_t pid = spawn(argv, {"NKB_NEW_COMP=" + path}, &err);
-      if (pid < 0) {
-        spdlog::error("event=natron_open_failed path=\"{}\" step=create reason=\"{}\"", path, err);
-        return forget(path);
-      }
-      int status = 0;
-      bool exited = false;
-      for (int i = 0; i < 1200 && !exited; ++i) {  // up to 120 s (the first snap start can be slow)
-        if (waitpid(pid, &status, WNOHANG) == pid) exited = true;
-        else std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
-      if (!exited) {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-      }
-      if (stat(path.c_str(), &st) != 0) {
-        spdlog::error("event=natron_open_failed path=\"{}\" step=create reason=\"{}\" command=\"{}\" see={}", path,
-                      exited ? "the script did not create the file" : "timed out after 120 s", join_words(argv),
-                      log_path_);
-        return forget(path);
-      }
-      spdlog::info("event=natron_comp_created path=\"{}\" ms={:.0f}", path, ms_since(t0));
+    const std::string script_file = scripts_dir_ + "/nkb_gui_open.py";
+    std::ifstream in(script_file);
+    std::stringstream code;
+    code << in.rdbuf();
+    if (!in || code.str().empty()) {
+      spdlog::error("event=natron_open_failed path=\"{}\" reason=\"cannot read {}\" hint=\"set [natron] scripts_dir\"",
+                    path, script_file);
+      return forget(path);
     }
-    // 2. Start the GUI on the file.
     std::vector<std::string> argv = gui_;
-    argv.push_back(path);
-    const pid_t pid = spawn(argv, {}, &err);
+    argv.push_back("-c");
+    argv.push_back(code.str());
+    const pid_t pid = spawn(argv, {"NKB_OPEN=" + path}, &err);
     if (pid < 0) {
-      spdlog::error("event=natron_open_failed path=\"{}\" step=gui reason=\"{}\"", path, err);
+      spdlog::error("event=natron_open_failed path=\"{}\" reason=\"{}\"", path, err);
       return forget(path);
     }
     {
       std::lock_guard<std::mutex> lk(m_);
       open_[path] = pid;
     }
-    spdlog::info("event=natron_gui_started path=\"{}\" pid={} command=\"{}\"", path, pid, join_words(argv));
+    spdlog::info("event=natron_gui_started path=\"{}\" pid={} command=\"{} -c <{}>\" output={}", path, pid,
+                 join_words(gui_), script_file, log_path_);
     int status = 0;
     waitpid(pid, &status, 0);  // this thread lives as long as the Natron window
     spdlog::info("event=natron_gui_exited path=\"{}\" pid={} status={}", path, pid,
@@ -249,7 +255,7 @@ class NatronLauncher {
 
   std::mutex m_;
   std::map<std::string, pid_t> open_;  // path -> pid of its Natron GUI (0 while being prepared)
-  std::vector<std::string> gui_, script_;
+  std::vector<std::string> gui_, raise_;
   std::string scripts_dir_, log_path_;
 };
 
