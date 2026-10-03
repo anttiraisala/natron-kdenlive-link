@@ -473,8 +473,8 @@ void resolve_comp(mlt_filter filter, Params* p) {
     }
     p->ntp = comp_file(own);
     mlt_properties_set(props, "ntp", p->ntp.c_str());
-    flog(kInfo, "event=comp_assigned comp=%s path=\"%s\" reason=%s", own.c_str(), p->ntp.c_str(),
-         is_new ? "new_effect" : "ntp_cleared");
+    flog(kInfo, "event=comp_assigned inst=%p comp=%s path=\"%s\" reason=%s", static_cast<void*>(filter), own.c_str(),
+         p->ntp.c_str(), is_new ? "new_effect" : "ntp_cleared");
   }
   mlt_service_unlock(MLT_FILTER_SERVICE(filter));
   p->ntp = absolute_ntp(p->ntp);
@@ -558,8 +558,8 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
 
   const char* result = ans.image ? (ans.cache_hit ? "cache_hit" : "rendered") : "passthrough";
   flog(kDebug,
-       "event=filter_frame comp=%s frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s hash_ms=%.1f total_ms=%.1f key=%s",
-       p.comp.c_str(), static_cast<long long>(pos), w, h, p.export_mode ? "export" : "playback", export_reason,
+       "event=filter_frame inst=%p comp=%s frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s hash_ms=%.1f total_ms=%.1f key=%s",
+       static_cast<void*>(filter), p.comp.c_str(), static_cast<long long>(pos), w, h, p.export_mode ? "export" : "playback", export_reason,
        consumer_name.c_str(), real_time_text.c_str(), process.c_str(), to_string(ans.status), result, hash_ms,
        ms_since(t0), key.hex().c_str());
   if (!ans.image && p.export_mode)
@@ -573,6 +573,12 @@ constexpr int64_t kOpenGuardMs = 1500;  // property changes this soon after crea
 
 void on_property_changed(mlt_properties props, void* object, mlt_event_data data) {
   const char* name = mlt_event_data_to_string(data);
+  // Diagnostics: who sets which composition on which effect instance (inst = the filter's address).
+  if (name && (!std::strcmp(name, "ntp") || !std::strcmp(name, "comp"))) {
+    const char* v = mlt_properties_get(props, name);
+    flog(kInfo, "event=property_set inst=%p name=%s value=\"%s\"", object, name, v ? v : "");
+    return;
+  }
   if (!name || std::strcmp(name, "open_natron") != 0) return;
   mlt_filter filter = static_cast<mlt_filter>(object);
   const std::string now = prop_or(props, "open_natron", "0");
@@ -602,7 +608,7 @@ void on_property_changed(mlt_properties props, void* object, mlt_event_data data
     frame_copy->pos = lf->pos;
     frame_copy->rgba = lf->rgba;
   }
-  flog(kInfo, "event=open_natron_clicked comp=%s path=\"%s\"", p.comp.c_str(), path.c_str());
+  flog(kInfo, "event=open_natron_clicked inst=%p comp=%s path=\"%s\"", object, p.comp.c_str(), path.c_str());
   // Write the preview and talk to the daemon on a separate thread: this runs on Kdenlive's GUI thread.
   std::thread([path, override_address, frame_copy] {
     if (frame_copy->rgba.empty()) {
@@ -655,7 +661,7 @@ extern "C" mlt_filter filter_natron_link_init(mlt_profile, mlt_service_type, con
   mlt_properties_set_data(props, "_nkb_last_frame", new LastFrame, 0,
                           [](void* p) { delete static_cast<LastFrame*>(p); }, nullptr);
   mlt_events_listen(props, filter, "property-changed", reinterpret_cast<mlt_listener>(on_property_changed));
-  flog(kInfo, "event=filter_created");
+  flog(kInfo, "event=filter_created inst=%p", static_cast<void*>(filter));
   return filter;
 }
 

@@ -125,7 +125,7 @@ echo "$OUT" | grep -q "inverted=2 unchanged=0 other=0" && pass "new effect: fram
 [[ "$ID1" =~ ^comp-[a-z0-9]{6}$ ]] && pass "new effect got the id $ID1" || fail "no comp-xxxxxx id: $OUT"
 echo "$OUT" | grep -q "props ntp=$NKB_HOME/comps/$ID1.ntp comp= nkb_auto_comp=$ID1" \
    && pass "ntp property points to comps/$ID1.ntp" || fail "ntp property: $OUT"
-[ "$(grep -c "event=comp_assigned comp=$ID1 .*reason=new_effect" "$ROOT/log.txt")" = "1" ] \
+[ "$(grep -c "event=comp_assigned .*comp=$ID1 .*reason=new_effect" "$ROOT/log.txt")" = "1" ] \
    && pass "comp_assigned logged once for the effect" || fail "comp_assigned log: $(grep comp_assigned "$ROOT/log.txt" | head -3)"
 grep -q "comp=$ID1 frame=51 .*result=rendered" "$ROOT/log.txt" && pass "frames are sent with comp=$ID1" || fail "comp id on the wire"
 OUT2=$("$CHECK" --frames 1 --start 50 --comp "" --ntp "" --mode export)
