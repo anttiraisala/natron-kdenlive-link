@@ -127,6 +127,16 @@ OUT=$("$BIN/nkb-mock-filter" --comp newone --ntp "$ROOT/my project/natron/new on
 echo "$OUT" | grep -q "ok=1" && [ -f "$ROOT/my project/natron/new one.ntp" ] \
    && pass "a missing .ntp in another folder is created there as pass-through" || fail "create elsewhere: $OUT"
 
+echo "== the example compositions (examples/*.ntp) render at 1920x1080"
+mkdir -p "$ROOT/examples"; cp "$HERE"/examples/*.ntp "$ROOT/examples/"
+OUT=$("$BIN/nkb-mock-filter" --comp ex_invert --ntp "$ROOT/examples/invert.ntp" --seed 40 --frames 2 --width 1920 --height 1080 --alpha-min 255 --tolerance 3 --expect-transform srgb-invert --expect ok=2 --timeout-ms 60000)
+echo "$OUT" | grep -q "ok=2" && echo "$OUT" | grep -q "mismatches=0" && pass "examples/invert.ntp inverts the colours" || fail "invert example: $OUT"
+for ex in bouncing_ball spotlight vignette title spinning_picture; do
+  OUT=$("$BIN/nkb-mock-filter" --comp "ex_$ex" --ntp "$ROOT/examples/$ex.ntp" --seed 41 --start 0 --frames 3 --width 1920 --height 1080 --alpha-min 255 --expect ok=3 --timeout-ms 60000)
+  OUT2=$("$BIN/nkb-mock-filter" --comp "ex_$ex" --ntp "$ROOT/examples/$ex.ntp" --seed 42 --start 300 --frames 1 --width 1920 --height 1080 --alpha-min 255 --expect ok=1 --timeout-ms 60000)
+  echo "$OUT" | grep -q "ok=3" && echo "$OUT2" | grep -q "ok=1" && pass "examples/$ex.ntp renders frames 0-2 and 300" || fail "$ex example: $OUT $OUT2"
+done
+
 stop_worker
 
 echo

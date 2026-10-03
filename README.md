@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.5.3, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.5.4, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -357,6 +357,37 @@ The name is picked when the effect renders its first frame, so the timeline curs
 
 **Crash protection.** If the worker dies while rendering a composition (Natron crashed) three times in a row, that composition is set aside: its frames pass through unprocessed and the worker is not sent them, so the other clips keep rendering. Saving the composition again in Natron lifts it. The log says `comp_quarantined` and `comp_released`; `natron-kdenlive-cache --status` shows `comps_quarantined`. The limit is `crash_limit` in `config.ini`.
 
+### Example compositions
+
+The folder [`examples/`](examples/) has ready-made compositions that follow the rules above (`NKB_Input` -> your nodes -> `NKB_Output`, output the size of the clip). Each one was rendered through the daemon and the Natron worker by `tests/natron_e2e.sh`.
+
+| File | What it does | Nodes |
+|---|---|---|
+| `invert.ntp` | Negative image; alpha untouched | Invert (A unticked) |
+| `bouncing_ball.ntp` | An orange ball bounces across the picture; the clip shows everywhere around it | Radial (the ball, position by expression) merged over the clip |
+| `spotlight.ntp` | Black and white, except inside a soft circle that moves round the picture | Saturation 0, masked by an inverted Radial |
+| `vignette.ntp` | Darker corners | Radial (transparent centre, 80 % black edges) merged over the clip |
+| `title.ntp` | A "lower third" title: a dark band with the words "Natron + Kdenlive", fading in during the first 25 frames | Rectangle + Text, merged over the clip with an animated mix |
+| `spinning_picture.ntp` | The clip at half size, turning slowly, over a blurred and darkened copy of itself | Blur, Grade, Transform (rotation by expression), Merge |
+
+![The examples applied to a test picture at frames 0, 12, 24 and 45](examples/preview.jpg)
+
+The animations are expressions of `frame` (the frame number counted from the start of the effect, see "Animation and frame numbers"), so they keep going for as long as the clip lasts and start over on every clip that uses them. Positions are pixels of a 1920x1080 frame; with another project size, adjust them in Natron.
+
+**To use an example**, copy the files to a folder of your own first, so that editing them (and the `_preview.tga` / `_output.tga` files that **Open in Natron** writes next to them) does not change the repository:
+
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+mkdir -p ~/NatronKdenliveLink/examples
+cp examples/*.ntp ~/NatronKdenliveLink/examples/
+ls ~/NatronKdenliveLink/examples/
+```
+
+Then, in Kdenlive: add the **Natron Link** effect to a clip, click the folder button of the **Natron project (.ntp)** field, and choose for example `~/NatronKdenliveLink/examples/bouncing_ball.ntp`. Move the timeline cursor over the clip; the first frame takes a few seconds (Natron loads the composition), then play the clip. To change an example, click **Open in Natron**, edit (for example the **Text** field of the Title text node, or the colour of the Ball node), and save with Ctrl+S; Kdenlive shows the change on the next frame it fetches. Several clips can use the same example file; they then share every change. To give one clip its own copy, use Natron's **File > Save Project As...** and choose the new file in that clip's field.
+
+[`examples/make_examples.py`](examples/make_examples.py) builds these files. It documents each graph and is a starting point for writing your own graphs in Python. Running it is only needed after changing it (the command is at the top of the file).
+
 ### Stopping everything
 
 ```bash
@@ -448,10 +479,12 @@ Verified only in the author's development container:
 
 * The full Natron worker test suite against the headless Natron 2.5.0 tarball: pass-through accuracy, Invert graph, sRGB and raw color modes, reload on file change, broken composition, 1080p timing, compositions in other folders (paths with spaces), CornerPin without the warm-up crash.
 * Open in Natron with the real Natron GUI on a virtual display: the composition is created or loaded, the viewer shows the clip's pixels exactly.
+* The example compositions in `examples/`: each renders 1920x1080 frames through the daemon and the worker at several frame numbers; their pictures were checked by eye.
 * Crash protection: three worker crashes on one composition quarantine it, the worker survives further requests, saving the file lifts it (with a test worker that crashes on purpose).
 
 Not verified on the author's machine yet:
 
+* The example compositions in Kdenlive and in the Natron snap's GUI.
 * A composition chosen outside `~/NatronKdenliveLink/comps/` (container tests pass; the snap must be able to read the folder).
 * Crash protection with a real Natron crash (the known crash is fixed; tested with a test worker).
 
@@ -490,6 +523,7 @@ tools/            cache tool, doctor, test clients, install-filter.sh
 data/kdenlive/    effect description for Kdenlive
 tests/            unit, end-to-end, filter and Natron worker tests
 docs/             detailed reference
+examples/         example compositions and the script that builds them (see "Example compositions")
 dev-memos/        the developer's own notes and example compositions (see below)
 ```
 
