@@ -11,10 +11,11 @@
  *                     [--playback-timeout-ms T] [--export-timeout-ms T]
  *                     [--comp NAME] [--ntp FILE] [--start F] [--sleep-ms M]
  *                     [--clear-ntp] [--save-xml FILE]
- *                     [--open-at-start] [--clicks N] [--click-after-ms MS]
+ *                     [--open-at-start] [--clicks N] [--click-after-ms MS] [--filter-in N]
  * Then prints the composition properties of the filter:
  *   props ntp=... comp=... nkb_auto_comp=...
  * --clear-ntp   afterwards empties "ntp", renders one more frame and prints the props again
+ * --filter-in N  sets the filter's in point (Kdenlive sets it to the clip's start)
  * --open-at-start  sets open_natron=1 right after creating the filter (like loading a
  *               project with that value saved; must NOT open Natron)
  * --clicks N    after the frames, waits --click-after-ms (default 1700) and then toggles
@@ -102,6 +103,7 @@ int main(int argc, char** argv) {
   mlt_properties_set(fp, "ntp", arg(argc, argv, "--ntp", ""));
   mlt_properties_set(fp, "playback_timeout_ms", arg(argc, argv, "--playback-timeout-ms", "250"));
   mlt_properties_set(fp, "export_timeout_ms", arg(argc, argv, "--export-timeout-ms", "5000"));
+  if (*arg(argc, argv, "--filter-in", "")) mlt_properties_set(fp, "in", arg(argc, argv, "--filter-in", "0"));
   if (has_flag(argc, argv, "--open-at-start")) mlt_properties_set(fp, "open_natron", "1");
   mlt_service_attach(MLT_PRODUCER_SERVICE(filtered), f);
 

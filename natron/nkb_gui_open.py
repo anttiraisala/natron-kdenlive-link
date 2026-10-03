@@ -13,7 +13,8 @@
 #   * NKB_Output gets the file name <name>_output.tga if it has none (otherwise Natron
 #     shows the node in error and the viewer stays black; the worker sets its own file
 #     names for every frame and never saves the project, so neither name matters there);
-#   * a viewer is connected to NKB_Output.
+#   * a viewer is connected to NKB_Output and moved to NKB_FRAME, the frame the Kdenlive
+#     effect showed last (counted from the effect's start, as the worker renders it).
 # Changing the file names marks the project as modified; Natron asks before closing.
 # Paths are set absolute on purpose: Natron itself turns a path inside the project folder
 # into "[Project]/..."; passing "[Project]/..." makes it add the prefix again (2.5.0).
@@ -79,6 +80,13 @@ def _nkb_gui_open():
             for v in viewers:
                 v.connectInput(0, w)
             _nkb_say("viewer connected to NKB_Output (%d viewer(s), attempt %d)" % (len(viewers), attempt))
+            frame = int(os.environ.get("NKB_FRAME", "-1") or -1)
+            if frame >= 0:
+                for v in viewers:
+                    gv = app.getViewer(v.getScriptName()) if hasattr(app, "getViewer") else None
+                    if gv is not None:
+                        gv.seek(frame)
+                _nkb_say("viewer at frame %d" % frame)
         except Exception:
             _nkb_say("error " + traceback.format_exc())
     QtCore = None

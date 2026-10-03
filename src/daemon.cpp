@@ -161,7 +161,7 @@ class NatronLauncher {
   // Validates the request and starts the work in the background, so the control
   // reply (and with it Kdenlive's GUI thread) is never held up by Natron.
   // Returns false with *reply = reason for an invalid request.
-  bool request(const std::string& path, uint64_t conn, std::string* reply) {
+  bool request(const std::string& path, long long frame, uint64_t conn, std::string* reply) {
     if (path.empty() || path[0] != '/' || path.size() < 5 || path.compare(path.size() - 4, 4, ".ntp") != 0 ||
         path.find('\n') != std::string::npos) {
       *reply = "open_natron needs an absolute path of a .ntp file";
@@ -183,7 +183,7 @@ class NatronLauncher {
     }
     open_[path] = 0;  // reserved while the composition is prepared
     spdlog::info("event=natron_open_requested conn={} path=\"{}\"", conn, path);
-    std::thread([this, path] { work(path); }).detach();
+    std::thread([this, path, frame] { work(path, frame); }).detach();
     *reply = "accepted";
     return true;
   }
@@ -235,7 +235,7 @@ class NatronLauncher {
     open_.erase(path);
   }
 
-  void work(const std::string path) {
+  void work(const std::string path, long long frame) {
     // The GUI runs natron/nkb_gui_open.py, passed as text with -c so that a snap does not
     // need to read the file: it loads (or creates) the composition, points NKB_Input at the
     // preview frame and connects a viewer. Natron cannot run a script after loading a
@@ -253,7 +253,7 @@ class NatronLauncher {
     std::vector<std::string> argv = gui_;
     argv.push_back("-c");
     argv.push_back(code.str());
-    const pid_t pid = spawn_process(argv, {"NKB_OPEN=" + path}, log_path_, &err);
+    const pid_t pid = spawn_process(argv, {"NKB_OPEN=" + path, "NKB_FRAME=" + std::to_string(frame)}, log_path_, &err);
     if (pid < 0) {
       spdlog::error("event=natron_open_failed path=\"{}\" reason=\"{}\"", path, err);
       return forget(path);
@@ -764,7 +764,15 @@ bool Daemon::handle_control(Socket& s, const Message& m, uint64_t conn) {
     out = "cleared_entries=" + std::to_string(r.entries) + "\ncleared_bytes=" + std::to_string(r.bytes) + "\n";
     spdlog::info("event=cache_cleared conn={} entries={} bytes={}", conn, r.entries, r.bytes);
   } else if (cmd.rfind("open_natron ", 0) == 0) {
-    if (!launcher_.request(cmd.substr(12), conn, &out)) {
+    // "open_natron <path>" with an optional second line "frame=N"
+    std::string path = cmd.substr(12);
+    long long frame = -1;
+    if (const size_t nl = path.find('\n'); nl != std::string::npos) {
+      const std::string rest = path.substr(nl + 1);
+      path.resize(nl);
+      if (rest.rfind("frame=", 0) == 0) frame = std::atoll(rest.c_str() + 6);
+    }
+    if (!launcher_.request(path, frame, conn, &out)) {
       Header h = make_header(MsgType::ControlReply);
       h.status = static_cast<uint16_t>(Status::Error);
       return send_message(s.fd(), h, out.data(), out.size(), nullptr);

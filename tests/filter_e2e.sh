@@ -38,6 +38,7 @@ cat > "$ROOT/fake_natron_gui.sh" <<'EOS'
 #!/bin/sh
 case "$2" in *_nkb_gui_open*) script=nkb_gui_open.py ;; *) script=other ;; esac
 echo "gui $1 <$script> NKB_OPEN=$NKB_OPEN" >> "$(dirname "$0")/natron_calls.txt"
+echo "frame $NKB_FRAME" >> "$(dirname "$0")/natron_calls.txt"
 sleep 3
 EOS
 cat > "$ROOT/fake_raise.sh" <<'EOS'
@@ -171,6 +172,7 @@ P="$NKB_HOME/comps/$ID.ntp"
 for _ in $(seq 1 30); do grep -q "^gui" "$ROOT/natron_calls.txt" 2>/dev/null && break; sleep 0.1; done
 grep -q "^gui -c <nkb_gui_open.py> NKB_OPEN=$P\$" "$ROOT/natron_calls.txt" 2>/dev/null \
    && pass "the Natron GUI is started with nkb_gui_open.py on the effect's own composition" || fail "gui step: $(cat "$ROOT/natron_calls.txt" 2>&1)"
+grep -q "^frame 80$" "$ROOT/natron_calls.txt" && pass "Natron is told the frame shown last (NKB_FRAME=80)" || fail "frame: $(cat "$ROOT/natron_calls.txt")"
 grep -q "event=preview_written path=\"$NKB_HOME/comps/${ID}_preview.tga\" frame=80 size=320x180" "$ROOT/log.txt" \
    && [ "$(stat -c %s "$NKB_HOME/comps/${ID}_preview.tga" 2>/dev/null)" = "$((18 + 320*180*4))" ] \
    && pass "the frame shown last is saved as ${ID}_preview.tga before Natron opens" || fail "preview: $(grep preview "$ROOT/log.txt" | head -2 | cut -c1-200)"
@@ -192,6 +194,15 @@ sleep 0.5
 sleep 0.5
 [ ! -s "$ROOT/natron_calls.txt" ] && pass "rendering with melt never opens Natron" || fail "melt opened Natron"
 stop_daemon
+
+echo "== Natron frame numbers count from the effect's start"
+start_daemon; start_worker --mode invert
+: > "$ROOT/log.txt"
+"$CHECK" --frames 2 --start 1222 --filter-in 1200 --mode export >/dev/null
+grep -q "event=filter_frame .* frame=22 src_frame=1222 " "$ROOT/log.txt" && grep -q "event=filter_frame .* frame=23 src_frame=1223 " "$ROOT/log.txt" \
+   && pass "a clip starting at source frame 1200: source frame 1222 is Natron frame 22" || fail "frame numbers: $(grep filter_frame "$ROOT/log.txt" | head -2 | grep -o 'frame=[0-9]* src_frame=[0-9]*')"
+grep -q "\[mock-worker\].*event=job_received .* frame=22 " "$ROOT/log.txt" && pass "the worker gets the effect-relative frame number" || fail "worker frame: $(grep job_received "$ROOT/log.txt" | head -1 | cut -c1-160)"
+kill "$WPID" 2>/dev/null; stop_daemon
 
 echo "== slow worker: playback passes through, later pull is processed"
 start_daemon; start_worker --mode invert --delay-ms 400

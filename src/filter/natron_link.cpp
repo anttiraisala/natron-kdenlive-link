@@ -11,6 +11,11 @@
 //   Pass-through on any failure is deliberate: a missing daemon or a slow render
 //   must never break Kdenlive playback.
 //
+// FRAME NUMBERS
+//   Natron renders frame N = the frame's position counted from the effect's start
+//   (mlt_filter_get_position), so animation keyed in Natron at frame 0 starts at the
+//   first frame of the clip. The log also shows the source position (src_frame).
+//
 // PLAYBACK vs EXPORT
 //   mode=auto decides per frame, first match wins:
 //     1. the frame's consumer has real_time <= 0 (non-realtime consumer)  -> export
@@ -524,7 +529,13 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
   p.timeout_ms = p.export_mode ? mlt_properties_get_int(props, "export_timeout_ms")
                                : mlt_properties_get_int(props, "playback_timeout_ms");
 
-  const int64_t pos = mlt_frame_get_position(frame);
+  // Frame number sent to Natron: counted from the effect's start (its "in" point), so Natron
+  // frame 0 is the first frame of the clip on the timeline, as with Kdenlive's own keyframes.
+  // mlt_frame_get_position() would be the position in the source media (e.g. 1222), far
+  // past animations made in Natron at frames 0..n. For an effect on a track or the master
+  // "in" is 0 and this is the timeline frame.
+  const int64_t pos = mlt_filter_get_position(filter, frame);
+  const int64_t src_pos = mlt_frame_get_position(frame);
   const uint32_t w = static_cast<uint32_t>(*width), h = static_cast<uint32_t>(*height);
 
   // Remember the input frame for "Open in Natron" (not while rendering: no use there).
@@ -558,8 +569,8 @@ int filter_get_image(mlt_frame frame, uint8_t** image, mlt_image_format* format,
 
   const char* result = ans.image ? (ans.cache_hit ? "cache_hit" : "rendered") : "passthrough";
   flog(kDebug,
-       "event=filter_frame inst=%p comp=%s frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s hash_ms=%.1f total_ms=%.1f key=%s",
-       static_cast<void*>(filter), p.comp.c_str(), static_cast<long long>(pos), w, h, p.export_mode ? "export" : "playback", export_reason,
+       "event=filter_frame inst=%p comp=%s frame=%lld src_frame=%lld size=%ux%u mode=%s export_reason=%s consumer=%s real_time=%s process=%s status=%s result=%s hash_ms=%.1f total_ms=%.1f key=%s",
+       static_cast<void*>(filter), p.comp.c_str(), static_cast<long long>(pos), static_cast<long long>(src_pos), w, h, p.export_mode ? "export" : "playback", export_reason,
        consumer_name.c_str(), real_time_text.c_str(), process.c_str(), to_string(ans.status), result, hash_ms,
        ms_since(t0), key.hex().c_str());
   if (!ans.image && p.export_mode)
@@ -628,7 +639,11 @@ void on_property_changed(mlt_properties props, void* object, mlt_event_data data
     Address a;
     std::string token, reply, err;
     if (!Address::parse(address, &a, &err) || !get_token(&token, false) ||
-        !control_request(a, token, "open_natron " + path, &reply, &err)) {
+        // "\nframe=N": the frame shown last (effect-relative), so Natron opens at that frame.
+        !control_request(a, token,
+                         "open_natron " + path +
+                             (frame_copy->rgba.empty() ? "" : "\nframe=" + std::to_string(frame_copy->pos)),
+                         &reply, &err)) {
       flog(kWarn, "event=open_natron_failed path=\"%s\" reason=\"%s\" hint=\"is natron-kdenlive-daemon running?\"",
            path.c_str(), err.empty() ? reply.c_str() : err.c_str());
       return;
