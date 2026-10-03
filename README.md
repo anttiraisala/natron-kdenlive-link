@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.4.1, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.4.2, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -216,15 +216,39 @@ tools/install-filter.sh install ~/apps/kdenlive/squashfs-root
 
 It copies `libmltnatron.so` and the effect description into the extracted tree and checks that the AppImage's own `melt` can load the filter. It must print `OK: the AppImage's MLT loaded libmltnatron.so`.
 
-### 2. Try it with the test worker (inverts colors)
+### 2. Start the daemon and Kdenlive
 
-Run each block in its own terminal and leave it running.
-
-**Terminal 1: the daemon**
+**Terminal 1: the daemon.** It also starts the Natron worker (`snap run natron -t natron/nkb_natron_worker.py`) and starts it again whenever it exits, for example after a crash inside Natron. Leave it running.
 ```bash
 # Folder: ~/projects-own/natron-kdenlive-link
 cd ~/projects-own/natron-kdenlive-link
 ./build/natron-kdenlive-daemon
+```
+
+**Terminal 2: check that the worker is connected** (the first start of Natron takes a few seconds; must print `workers=1`)
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+./build/natron-kdenlive-cache --status | grep -E "^workers="
+```
+
+**Terminal 2: Kdenlive**
+```bash
+# Folder: any
+~/apps/kdenlive/squashfs-root/AppRun
+```
+
+In Kdenlive, search the Effects tab for **Natron Link** (listed under *Misc*) and drag it onto a clip.
+
+With the Natron tarball instead of the snap, set `worker_command` (and `gui_command`) in `~/NatronKdenliveLink/config.ini` to the tarball's `NatronRenderer` (and `Natron`), see [Configuration](#configuration). To run the worker by hand instead, set `start_worker = false` or start the daemon with `--no-worker`. The worker's own output, including Natron's crash messages, is in `~/NatronKdenliveLink/logs/natron-worker.log`; the main log has `worker_launched`, `worker_exited` and `worker_restarting` lines. To restart the worker (for example after updating its script), stop it with `pkill -9 -f nkb_natron_worker`: the daemon starts it again within a few seconds.
+
+### 3. Optional: test without Natron (test worker that inverts colors)
+
+**Terminal 1: the daemon without the Natron worker**
+```bash
+# Folder: ~/projects-own/natron-kdenlive-link
+cd ~/projects-own/natron-kdenlive-link
+./build/natron-kdenlive-daemon --no-worker
 ```
 
 **Terminal 2: the test worker**
@@ -234,38 +258,9 @@ cd ~/projects-own/natron-kdenlive-link
 ./build/nkb-mock-worker --mode invert --delay-ms 100
 ```
 
-**Terminal 3: Kdenlive**
-```bash
-# Folder: any
-~/apps/kdenlive/squashfs-root/AppRun
-```
+Start Kdenlive as above. A clip with the Natron Link effect shows inverted colors after the first pass over each frame.
 
-In Kdenlive, search the Effects tab for **Natron Link** (listed under *Misc*), drag it onto a clip, and play. The clip shows inverted colors after the first pass over each frame.
-
-### 3. Use the real Natron worker
-
-Stop the test worker (Ctrl+C in terminal 2), then start the Natron worker in terminal 2 instead. Use the line for your Natron install.
-
-**Terminal 2: Natron worker, snap**
-```bash
-# Folder: ~/projects-own/natron-kdenlive-link
-cd ~/projects-own/natron-kdenlive-link
-snap run natron -t natron/nkb_natron_worker.py
-```
-
-**Terminal 2: Natron worker, tarball**
-```bash
-# Folder: ~/projects-own/natron-kdenlive-link
-cd ~/projects-own/natron-kdenlive-link
-~/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/NatronRenderer -t natron/nkb_natron_worker.py
-```
-
-**Terminal 4: check that the worker is connected** (wait a few seconds after starting it; must print `workers=1`)
-```bash
-# Folder: ~/projects-own/natron-kdenlive-link
-cd ~/projects-own/natron-kdenlive-link
-./build/natron-kdenlive-cache --status | grep -E "^workers="
-```
+### Using Natron compositions
 
 **Each effect gets its own composition.** When a newly added Natron Link effect renders its first frame, it picks a new composition name `comp-xxxxxx` (6 random letters and digits) and sets its **Natron project (.ntp)** field to `~/NatronKdenliveLink/comps/comp-xxxxxx.ntp`. The name is saved with the Kdenlive project. The worker creates that file as a default pass-through graph (Read node `NKB_Input` connected to Write node `NKB_Output`) when it renders the first frame for it. Open the file in the Natron GUI, add nodes between the two, and save. The worker reloads the file when it changes, and Kdenlive shows the new result.
 
@@ -304,7 +299,9 @@ The daemon writes a fully commented `~/NatronKdenliveLink/config.ini` on first s
 | `buffer_behavior` | `buffer_skip` | When the queue is full: `buffer_skip`, `pause` or `show_cached` |
 | `natron_timeout_seconds` | 10 | A worker needing longer for one frame is dropped |
 | `no_worker_wait_ms` | 0 | How long a request waits while no worker is connected |
-| `[natron] gui_command` | `snap run natron` | Starts the Natron GUI for **Open in Natron** (with `-c <natron/nkb_gui_open.py>`) |
+| `[natron] start_worker` | `true` | The daemon starts the Natron worker and restarts it when it exits (after 2 s; up to 60 s if it keeps dying) |
+| `worker_command` | `snap run natron` | Runs the worker; `-t natron/nkb_natron_worker.py` is added |
+| `gui_command` | `snap run natron` | Starts the Natron GUI for **Open in Natron** (with `-c <natron/nkb_gui_open.py>`) |
 | `raise_command` | `wmctrl -a` | Brings an open Natron window to the front; the `.ntp` file name is added at the end. Empty = off |
 | `scripts_dir` | empty | Folder of `nkb_gui_open.py`; empty = found automatically |
 | `[logging] level` | `debug` | `trace`, `debug`, `info`, `warn`, `error` |
@@ -346,7 +343,7 @@ When something fails, the log and the output of `natron-kdenlive-doctor` are eno
 |---|---|
 | Daemon prints `Address already in use` | An old daemon is still running. Stop it with `pkill -9 -f natron-kdenlive-daemon` |
 | "Natron Link" is not in the effects list | Kdenlive needs the module and the effect XML in the extracted AppImage. Re-run `tools/install-filter.sh install ~/apps/kdenlive/squashfs-root`; start Kdenlive with `~/apps/kdenlive/squashfs-root/AppRun`, not the original `.AppImage`. A log line `Invalid metadata for natron_link` means an old module without MLT metadata |
-| Clip looks unprocessed | Check `./build/natron-kdenlive-cache --status`. `workers=0` means no worker is connected, and frames pass through |
+| Clip looks unprocessed | Check `./build/natron-kdenlive-cache --status`. `workers=0` means no worker is connected, and frames pass through. The daemon restarts a crashed worker within seconds; `grep worker_ ~/NatronKdenliveLink/logs/natron-kdenlive.log` shows what happened and `logs/natron-worker.log` Natron's own messages. Also check that the composition is saved (no `*` in Natron's title) |
 | Export is unprocessed | Look for `export_frame_unprocessed` in the log. Start the worker before rendering, or raise `no_worker_wait_ms` |
 | Natron snap cannot reach files | The snap sees only non-hidden folders in your home. Keep the exchange folder visible (`NKB_EXCHANGE_DIR`) and use `tcp:` addresses |
 

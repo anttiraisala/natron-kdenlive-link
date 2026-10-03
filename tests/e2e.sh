@@ -26,6 +26,9 @@ natron_timeout_seconds = $5
 cache_memory_mb = 256
 cache_memory_min_mb = 1
 stats_log_interval_seconds = 0
+[natron]
+start_worker = ${START_WORKER:-false}
+worker_command = ${WORKER_COMMAND:-snap run natron}
 [logging]
 level = debug
 log_file = $ROOT/log.txt
@@ -140,6 +143,32 @@ start_worker --mode invert --hang-frame 1
 sleep 0.5
 [ "$(stat_of workers)" = "0" ] && pass "stuck worker connection dropped" || fail "workers=$(stat_of workers)"
 kill "$WPID" 2>/dev/null; stop_daemon
+
+echo "== the daemon starts the worker and restarts it when it dies"
+# Stand-in for "natron -t nkb_natron_worker.py": runs the mock worker and records its pid.
+cat > "$ROOT/fake_natron.sh" <<EOS
+#!/bin/sh
+echo "\$\$ \$*" >> "$ROOT/worker_starts.txt"
+exec "$BIN/nkb-mock-worker" --mode invert
+EOS
+chmod +x "$ROOT/fake_natron.sh"
+START_WORKER=true WORKER_COMMAND="$ROOT/fake_natron.sh" write_config "unix:$ROOT/s6.sock" "unix:$ROOT/w6.sock" buffer_skip 512 10
+: > "$ROOT/log.txt"
+start_daemon
+for _ in $(seq 1 30); do [ "$(stat_of workers)" = "1" ] && break; sleep 0.1; done
+[ "$(stat_of workers)" = "1" ] && grep -q "nkb_natron_worker.py" "$ROOT/worker_starts.txt" \
+   && pass "worker started by the daemon (-t .../nkb_natron_worker.py)" || fail "supervised start: workers=$(stat_of workers)"
+"$BIN/nkb-mock-filter" --frames 2 --expect ok=2 >/dev/null && pass "supervised worker renders" || fail "supervised render"
+W1=$(tail -1 "$ROOT/worker_starts.txt" | cut -d' ' -f1)
+kill -9 "$W1" 2>/dev/null
+for _ in $(seq 1 60); do [ "$(wc -l < "$ROOT/worker_starts.txt")" = "2" ] && [ "$(stat_of workers)" = "1" ] && break; sleep 0.1; done
+grep -q "event=worker_exited pid=$W1 signal=9 .*restart=yes" "$ROOT/log.txt" && [ "$(stat_of workers)" = "1" ] \
+   && pass "a killed worker is restarted (signal 9 logged, workers=1 again)" || fail "restart: $(grep -E 'worker_(exited|launched|restarting)' "$ROOT/log.txt" | cut -c1-160)"
+"$BIN/nkb-mock-filter" --frames 2 --seed 7 --expect ok=2 >/dev/null && pass "the restarted worker renders" || fail "render after restart"
+W2=$(tail -1 "$ROOT/worker_starts.txt" | cut -d' ' -f1)
+stop_daemon
+sleep 0.3
+kill -0 "$W2" 2>/dev/null && fail "worker $W2 still running after the daemon stopped" || pass "stopping the daemon stops its worker"
 
 echo "== log is structured"
 grep -q "event=job_done" "$ROOT/log.txt" && grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z \[' "$ROOT/log.txt" \

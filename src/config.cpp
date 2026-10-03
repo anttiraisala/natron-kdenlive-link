@@ -71,6 +71,12 @@ const Spec kSpecs[] = {
      "Largest single frame accepted (protects against corrupt headers)."},
     {"daemon", "stats_log_interval_seconds", "5", Type::Int, 0, 3600, "",
      "Log a stats line every N seconds. 0 disables."},
+    {"natron", "start_worker", "true", Type::Bool, 0, 0, "",
+     "Start the Natron worker with the daemon and start it again whenever it exits (Natron can crash).\n"
+     "# false = start nkb_natron_worker.py by hand."},
+    {"natron", "worker_command", "snap run natron", Type::Str, 0, 0, "",
+     "Command that runs the worker inside Natron; \"-t <scripts_dir>/nkb_natron_worker.py\" is added.\n"
+     "# Tarball example: /home/me/apps/natron/Natron-2.5.0-Linux-x86_64-no-installer/NatronRenderer"},
     {"natron", "gui_command", "snap run natron", Type::Str, 0, 0, "",
      "Command that starts the Natron GUI; \"-c <script>\" is added, the script opens the .ntp.\n"
      "# Used by \"Open in Natron\" in the Kdenlive effect. Words are split at spaces (no quoting).\n"
@@ -80,7 +86,7 @@ const Spec kSpecs[] = {
      "# the file name (e.g. comp-abc123.ntp, part of Natron's window title) is added as the last\n"
      "# argument. wmctrl: sudo apt install wmctrl (X11 desktops). Empty = do not raise."},
     {"natron", "scripts_dir", "", Type::Str, 0, 0, "",
-     "Folder of nkb_gui_open.py. Empty = found automatically: the natron/ folder of the source\n"
+     "Folder of nkb_gui_open.py and nkb_natron_worker.py. Empty = found automatically: the natron/\n"
      "# tree when the daemon runs from build/, or the installed share/natron-kdenlive-link/natron."},
     {"logging", "level", "debug", Type::Enum, 0, 0, "trace|debug|info|warn|error",
      "Log verbosity. debug logs every frame event."},

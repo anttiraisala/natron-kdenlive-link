@@ -239,6 +239,8 @@ name and the allowed range.
 | `no_worker_wait_ms` | 0 | While no worker is connected, a request waits at most this long; frames are still queued for when a worker connects |
 | `max_frame_mb` | 1024 | Largest accepted frame |
 | `stats_log_interval_seconds` | 5 | Periodic `event=stats` log line, 0 = off |
+| `[natron] start_worker` | `true` | The daemon starts the worker (`worker_command -t <scripts_dir>/nkb_natron_worker.py`, with `NKB_EXIT_WITH_PID=<daemon pid>`) in its own session and starts it again when it exits with an error or a signal: after 2 s, doubling up to 60 s while it keeps dying within a minute. A clean exit (`worker.stop`, `NKB_MAX_JOBS`) is not restarted. Stopping the daemon stops the worker (SIGTERM, then SIGKILL after 3 s: Natron ignores SIGTERM). Output in `logs/natron-worker.log`; log events `worker_supervisor`, `worker_launched`, `worker_exited`, `worker_restarting`, `worker_start_failed`, `worker_stopped_by_daemon`. `natron-kdenlive-daemon --no-worker` overrides it |
+| `worker_command` | `snap run natron` | Command that runs a Natron Python script headless; `-t <script>` is added |
 | `[natron] gui_command` | `snap run natron` | Starts the Natron GUI; `-c <text of nkb_gui_open.py>` is added (the text, not the path, so a snap needs no access to the file). Words split at spaces, no quoting |
 | `raise_command` | `wmctrl -a` | Brings an already open Natron window to the front; the `.ntp` file name (part of Natron's window title) is added. Empty = off |
 | `scripts_dir` | empty | Folder of `nkb_gui_open.py`. Empty: `<daemon dir>/../natron`, then the source tree the daemon was built from, then the installed `share/natron-kdenlive-link/natron` |

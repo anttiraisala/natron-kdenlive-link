@@ -39,6 +39,8 @@ filter_address = $FADDR
 worker_address = $WADDR
 natron_timeout_seconds = 30
 stats_log_interval_seconds = 0
+[natron]
+start_worker = false
 [logging]
 level = debug
 log_file = $ROOT/log.txt

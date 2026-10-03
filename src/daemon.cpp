@@ -17,6 +17,7 @@
 //   queue_ etc. input queue + in-flight map, guarded by qm_
 //   Job         guarded by its own mutex; filters wait on it, workers complete it
 //   launcher_   "Open in Natron" (NatronLauncher, own mutex, own background threads)
+//   supervisor_ starts the Natron worker and restarts it when it exits (own thread)
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -74,6 +75,50 @@ std::string join_words(const std::vector<std::string>& v) {
   return s;
 }
 
+// Starts argv in a new session (so its process group can be stopped as a whole), with
+// stdin from /dev/null and stdout/stderr appended to log_path. Returns the pid or -1.
+pid_t spawn_process(const std::vector<std::string>& argv, const std::vector<std::string>& extra_env,
+                    const std::string& log_path, std::string* err) {
+  if (argv.empty()) {
+    *err = "empty command";
+    return -1;
+  }
+  std::vector<char*> args;
+  for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
+  args.push_back(nullptr);
+  std::vector<std::string> env_store(extra_env);
+  std::vector<char*> env;
+  for (char** e = environ; *e; ++e) env.push_back(*e);
+  for (auto& e : env_store) env.push_back(const_cast<char*>(e.c_str()));
+  env.push_back(nullptr);
+
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+  posix_spawn_file_actions_addopen(&fa, 1, log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+  posix_spawn_file_actions_adddup2(&fa, 1, 2);
+  posix_spawnattr_t at;
+  posix_spawnattr_init(&at);
+  sigset_t none, def;
+  sigemptyset(&none);
+  sigemptyset(&def);
+  sigaddset(&def, SIGPIPE);  // the daemon ignores SIGPIPE; Natron gets the default
+  sigaddset(&def, SIGINT);
+  sigaddset(&def, SIGTERM);
+  posix_spawnattr_setsigmask(&at, &none);
+  posix_spawnattr_setsigdefault(&at, &def);
+  posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSID | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+  pid_t pid = -1;
+  const int rc = posix_spawnp(&pid, args[0], &fa, &at, args.data(), env.data());
+  posix_spawn_file_actions_destroy(&fa);
+  posix_spawnattr_destroy(&at);
+  if (rc != 0) {
+    *err = std::string("cannot start ") + argv[0] + ": " + std::strerror(rc);
+    return -1;
+  }
+  return pid;
+}
+
 // --------------------------------------------------------- Natron GUI ------
 // "Open in Natron" in the Kdenlive effect arrives as the control command
 // "open_natron <path of the .ntp>". The filter does not start Natron itself: it runs
@@ -100,6 +145,8 @@ class NatronLauncher {
     spdlog::info("event=natron_launcher gui_command=\"{}\" raise_command=\"{}\" scripts_dir=\"{}\"",
                  join_words(gui_), join_words(raise_), scripts_dir_);
   }
+
+  const std::string& scripts_dir() const { return scripts_dir_; }
 
   // Validates the request and starts the work in the background, so the control
   // reply (and with it Kdenlive's GUI thread) is never held up by Natron.
@@ -151,45 +198,6 @@ class NatronLauncher {
     return candidates.front();
   }
 
-  // Starts argv in a new session with stdin from /dev/null and stdout/stderr appended
-  // to the Natron log. Returns the pid or -1.
-  pid_t spawn(const std::vector<std::string>& argv, const std::vector<std::string>& extra_env, std::string* err) {
-    std::vector<char*> args;
-    for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
-    args.push_back(nullptr);
-    std::vector<std::string> env_store(extra_env);
-    std::vector<char*> env;
-    for (char** e = environ; *e; ++e) env.push_back(*e);
-    for (auto& e : env_store) env.push_back(const_cast<char*>(e.c_str()));
-    env.push_back(nullptr);
-
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&fa, 1, log_path_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-    posix_spawn_file_actions_adddup2(&fa, 1, 2);
-    posix_spawnattr_t at;
-    posix_spawnattr_init(&at);
-    sigset_t none, def;
-    sigemptyset(&none);
-    sigemptyset(&def);
-    sigaddset(&def, SIGPIPE);  // the daemon ignores SIGPIPE; Natron gets the default
-    sigaddset(&def, SIGINT);
-    sigaddset(&def, SIGTERM);
-    posix_spawnattr_setsigmask(&at, &none);
-    posix_spawnattr_setsigdefault(&at, &def);
-    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSID | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
-    pid_t pid = -1;
-    const int rc = posix_spawnp(&pid, args[0], &fa, &at, args.data(), env.data());
-    posix_spawn_file_actions_destroy(&fa);
-    posix_spawnattr_destroy(&at);
-    if (rc != 0) {
-      *err = std::string("cannot start ") + argv[0] + ": " + std::strerror(rc);
-      return -1;
-    }
-    return pid;
-  }
-
   // Runs raise_command <file name> in the background; its exit status says whether a
   // window was found (wmctrl: 0 = raised, 1 = no window with that title).
   void raise_window(const std::string& path) {
@@ -197,7 +205,7 @@ class NatronLauncher {
     std::vector<std::string> argv = raise_;
     argv.push_back(path.substr(path.rfind('/') + 1));
     std::string err;
-    const pid_t pid = spawn(argv, {}, &err);
+    const pid_t pid = spawn_process(argv, {}, log_path_, &err);
     if (pid < 0) {
       spdlog::warn("event=natron_raise_failed path=\"{}\" reason=\"{}\" hint=\"sudo apt install wmctrl, or set "
                    "[natron] raise_command\"", path, err);
@@ -235,7 +243,7 @@ class NatronLauncher {
     std::vector<std::string> argv = gui_;
     argv.push_back("-c");
     argv.push_back(code.str());
-    const pid_t pid = spawn(argv, {"NKB_OPEN=" + path}, &err);
+    const pid_t pid = spawn_process(argv, {"NKB_OPEN=" + path}, log_path_, &err);
     if (pid < 0) {
       spdlog::error("event=natron_open_failed path=\"{}\" reason=\"{}\"", path, err);
       return forget(path);
@@ -273,6 +281,94 @@ struct Job {
   Status status = Status::Error;
   std::shared_ptr<const Frame> result;
   std::string detail;  // reason for non-Ok statuses
+};
+
+// ------------------------------------------------------ worker supervisor --
+// With [natron] start_worker = true the daemon starts the Natron worker itself
+// ([natron] worker_command -t natron/nkb_natron_worker.py) and starts it again whenever
+// it exits: Natron can crash inside its own code (seen: a segfault in its TGA writer),
+// which no Python code can catch. A worker that keeps dying soon after its start is
+// restarted after 2, 4, 8 ... up to 60 s, so a composition that always crashes Natron
+// does not cause a tight loop. Output (Natron messages, crash backtraces) goes to
+// <data dir>/logs/natron-worker.log. When the daemon stops it stops the worker; the
+// worker also gets NKB_EXIT_WITH_PID=<daemon pid> and leaves by itself if the daemon is
+// killed (kill -9).
+class WorkerSupervisor {
+ public:
+  void configure(const Config& cfg, const std::string& scripts_dir) {
+    enabled_ = cfg.get_bool("natron", "start_worker");
+    argv_ = split_words(cfg.get("natron", "worker_command"));
+    argv_.push_back("-t");
+    argv_.push_back(scripts_dir + "/nkb_natron_worker.py");
+    log_path_ = home_dir() + "/logs/natron-worker.log";
+    mkdir((home_dir() + "/logs").c_str(), 0755);
+    if (enabled_)
+      spdlog::info("event=worker_supervisor command=\"{}\" output={}", join_words(argv_), log_path_);
+    else
+      spdlog::info("event=worker_supervisor disabled=1 reason=\"[natron] start_worker = false; start the worker by hand\"");
+  }
+
+  void start() {
+    if (enabled_) thread_ = std::thread([this] { loop(); });
+  }
+
+  // Called after g_stop is set: the loop stops the worker and returns.
+  void join() {
+    if (thread_.joinable()) thread_.join();
+  }
+
+ private:
+  void loop() {
+    int quick_failures = 0;
+    while (!g_stop) {
+      const auto t0 = Clock::now();
+      std::string err;
+      const pid_t pid = spawn_process(argv_, {"NKB_EXIT_WITH_PID=" + std::to_string(getpid())}, log_path_, &err);
+      double ran_s = 0;
+      if (pid < 0) {
+        spdlog::error("event=worker_start_failed reason=\"{}\" command=\"{}\"", err, join_words(argv_));
+      } else {
+        spdlog::info("event=worker_launched pid={}", pid);
+        int status = 0;
+        bool exited = false;
+        while (!g_stop) {
+          if (waitpid(pid, &status, WNOHANG) == pid) {
+            exited = true;
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        if (!exited) {  // the daemon is stopping: stop the worker's whole process group
+          kill(-pid, SIGTERM);
+          for (int i = 0; i < 15 && waitpid(pid, &status, WNOHANG) != pid; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          kill(-pid, SIGKILL);  // Natron ignores SIGTERM
+          waitpid(pid, &status, 0);
+          spdlog::info("event=worker_stopped_by_daemon pid={}", pid);
+          return;
+        }
+        ran_s = ms_since(t0) / 1000.0;
+        const std::string how = WIFSIGNALED(status) ? "signal=" + std::to_string(WTERMSIG(status))
+                                                    : "exit_code=" + std::to_string(WEXITSTATUS(status));
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+          // A clean exit is a deliberate stop (<data dir>/worker.stop, NKB_MAX_JOBS): respect it.
+          spdlog::info("event=worker_exited pid={} {} ran_s={:.0f} restart=no reason=\"stopped on purpose\"", pid,
+                       how, ran_s);
+          return;
+        }
+        spdlog::warn("event=worker_exited pid={} {} ran_s={:.0f} restart=yes see={}", pid, how, ran_s, log_path_);
+      }
+      quick_failures = ran_s < 60 ? quick_failures + 1 : 1;
+      const int delay_s = std::min(60, 2 << std::min(quick_failures - 1, 5));
+      spdlog::info("event=worker_restarting in_s={} quick_failures={}", delay_s, quick_failures);
+      for (int i = 0; i < delay_s * 5 && !g_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+  }
+
+  bool enabled_ = false;
+  std::vector<std::string> argv_;
+  std::string log_path_;
+  std::thread thread_;
 };
 
 class Daemon {
@@ -315,6 +411,7 @@ class Daemon {
   std::string token_;
   FrameCache cache_;
   NatronLauncher launcher_;
+  WorkerSupervisor supervisor_;
   Address filter_addr_, worker_addr_;
   Socket filter_listener_, worker_listener_;
   Behavior behavior_ = Behavior::BufferSkip;
@@ -353,6 +450,7 @@ bool Daemon::start(std::string* err) {
     return false;
   }
   launcher_.configure(cfg_);
+  supervisor_.configure(cfg_, launcher_.scripts_dir());
 
   // Cache budget = target clamped into [min, max].
   int64_t target = cfg_.get_int("daemon", "cache_memory_mb");
@@ -392,6 +490,7 @@ bool Daemon::start(std::string* err) {
 
 void Daemon::run() {
   std::thread acceptor([this] { accept_loop(); });
+  supervisor_.start();  // the listeners are ready, so the worker can connect at once
   const int interval = static_cast<int>(cfg_.get_int("daemon", "stats_log_interval_seconds"));
   auto last = Clock::now();
   while (!g_stop) {
@@ -402,6 +501,7 @@ void Daemon::run() {
     }
   }
   spdlog::info("event=daemon_stopping active_connections={}", active_.load());
+  supervisor_.join();
   cv_jobs_.notify_all();
   cv_space_.notify_all();
   acceptor.join();
@@ -878,13 +978,19 @@ std::string Daemon::stats_line() {
 
 // --------------------------------------------------------------- main ------
 int main(int argc, char** argv) {
+  bool no_worker = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
+    if (a == "--no-worker") {
+      no_worker = true;
+      continue;
+    }
     if (a == "--help" || a == "-h") {
       std::puts("natron-kdenlive-daemon\n"
                 "  Frame router between the Kdenlive MLT filter and the Natron worker.\n"
                 "  Data directory: $NKB_HOME or ~/NatronKdenliveLink (config.ini, token, logs/)\n"
                 "  Options: --help\n"
+                "           --no-worker   do not start the Natron worker ([natron] start_worker = false)\n"
                 "  Stop with Ctrl+C (SIGINT) or SIGTERM.");
       return 0;
     }
@@ -908,6 +1014,7 @@ int main(int argc, char** argv) {
     for (auto& e : errors) std::fprintf(stderr, "  %s\n", e.c_str());
     return 1;
   }
+  if (no_worker) cfg.set("natron", "start_worker", "false");
   std::string log_file = cfg.get("logging", "log_file");
   if (log_file.empty()) log_file = default_log_path();
   if (!init_logging("daemon", cfg.get("logging", "level"), log_file, cfg.get_bool("logging", "console"), &err))

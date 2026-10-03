@@ -24,6 +24,7 @@ worker_address = unix:$ROOT/w.sock
 natron_timeout_seconds = 10
 stats_log_interval_seconds = 0
 [natron]
+start_worker = false
 gui_command = $ROOT/fake_natron_gui.sh
 raise_command = $ROOT/fake_raise.sh
 [logging]
