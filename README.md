@@ -220,7 +220,7 @@ dev-memos/        the developer's own notes and example compositions (see below)
 The folder [`dev-memos/`](dev-memos/) holds the developer's own working notes. They are kept in the repository so that they are available to everybody, but they are memos, not maintained documentation, and they may be out of date or specific to the author's machine:
 
 * [`dev-memos/rd.txt`](dev-memos/rd.txt): the commands the author used to install the build packages and to build MLT 7.40.0 into `~/projects-own/kdenlive-natron-bridge/third-party` (the project's old folder name).
-* [`dev-memos/comps/`](dev-memos/comps/): example Natron compositions from the author's tests. `comp.ntp` is the default pass-through graph the worker creates (`NKB_Input` -> `NKB_Output`); `invert_rgb.ntp` and `invert_rgb2.ntp` invert the colors. To try one, copy it to `~/NatronKdenliveLink/comps/` and select it in the effect panel. The files contain the author's home path in Natron's project-path setting; Natron ignores a path that does not exist.
+* [`dev-memos/comps/`](dev-memos/comps/): example Natron compositions from the author's tests. `comp.ntp` is the default pass-through graph the worker creates (`NKB_Input` -> `NKB_Output`); `invert_rgb.ntp` inverts the colors (Read -> Invert -> Write, with a disabled Ramp node); `invert_rgb2.ntp` is the same graph with the Ramp node enabled, so a gradient is drawn over the inverted image. To try one, copy it to `~/NatronKdenliveLink/comps/` and select it in the effect panel. Natron's project-path setting in these files is written as `~/NatronKdenliveLink/comps`; the bridge does not use it, because the worker sets the input and output file paths itself for every frame.
 
 ## Uninstall
 
