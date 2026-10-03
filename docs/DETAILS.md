@@ -208,7 +208,7 @@ When the queue of frames waiting for Natron exceeds `input_queue_memory_mb`:
 A single frame larger than the whole queue limit is still accepted when the queue is empty.
 
 ### Wire protocol
-Fixed 104 byte little-endian header plus payload. The header carries width, height, pixel format
+Fixed 104 byte little-endian header plus payload. In a `FrameRequest` and the `Job` made from it, the header field `ntp_len` (offset 44, formerly reserved and zero) gives the length of the `.ntp` path that follows the image in the payload; the worker loads exactly that file (0 = no path: the worker uses `<comps dir>/<comp id>.ntp`). Paths up to 4096 bytes. The header carries width, height, pixel format
 (RGBA8 / RGBA16 / RGBAF32), alpha mode and colorspace on every frame, so other resolutions and formats need no
 protocol change. Only RGBA8 frames are exercised end to end in milestone 1; RGBA16 and RGBAF32 are covered by the unit
 tests for size computation only. The layout is documented in `include/nkb/protocol.h`.
@@ -234,6 +234,7 @@ name and the allowed range.
 | `cache_memory_min_mb` / `cache_memory_max_mb` | 256 / 5120 | Clamp for the cache size |
 | `input_queue_memory_mb` | 512 | Frames waiting for Natron |
 | `buffer_behavior` | `buffer_skip` | `pause`, `buffer_skip`, `show_cached` |
+| `crash_limit` | 3 | Crash protection: a composition on which the worker died (connection closed while rendering) this many times in a row is quarantined: requests are answered with an error at once, queued jobs are dropped, frames pass through. It is released when its `.ntp` changes (mtime) or the daemon restarts. Identified by the `.ntp` path of the request, else the comp id (`<data dir>/comps/<id>.ntp` is watched). Events `comp_crashed`, `comp_quarantined`, `comp_released`; stat `comps_quarantined`. 0 = off |
 | `natron_timeout_seconds` | 10 | A worker needing longer per frame is dropped |
 | `default_request_timeout_ms` | 1000 | Wait time when the filter does not specify one |
 | `no_worker_wait_ms` | 0 | While no worker is connected, a request waits at most this long; frames are still queued for when a worker connects |

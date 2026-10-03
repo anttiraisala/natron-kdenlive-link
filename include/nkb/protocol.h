@@ -23,6 +23,7 @@ namespace nkb {
 constexpr uint32_t kMagic = 0x314B4E42u;
 constexpr uint16_t kProtocolVersion = 1;
 constexpr size_t kCompIdLen = 32;
+constexpr uint32_t kMaxNtpLen = 4096;  // longest .ntp path accepted in a FrameRequest/Job
 
 // timeout_ms value meaning "use the daemon's default_request_timeout_ms".
 constexpr uint32_t kTimeoutDefault = 0xFFFFFFFFu;
@@ -86,7 +87,8 @@ struct Header {
   uint16_t status;         // 36  Status (replies)
   uint16_t flags;          // 38  request flags; Role in Hello
   uint32_t timeout_ms;     // 40  how long the daemon may block the requester
-  uint32_t reserved0;      // 44  must be zero
+  uint32_t ntp_len;        // 44  FrameRequest/Job: bytes of a .ntp path that follow the image
+                           //     in the payload (0 = none: the worker uses comps/<comp_id>.ntp)
   uint64_t key_hi;         // 48  content hash of everything the result depends on
   uint64_t key_lo;         // 56
   uint64_t payload_size;   // 64  bytes following the header
@@ -143,6 +145,10 @@ enum class RecvResult { Ok, Timeout, Closed, Error };
 
 // Sends header + payload. Fills magic/version/payload_size itself.
 bool send_message(int fd, Header h, const void* payload, size_t n, std::string* err);
+// Same, with a second buffer sent right after the first (image + .ntp path, without copying the image).
+bool send_message(int fd, Header h, const void* payload, size_t n, const void* tail, size_t tail_n, std::string* err);
+// The .ntp path at the end of a FrameRequest/Job payload ("" when ntp_len is 0 or does not fit).
+std::string payload_ntp_path(const Header& h, const std::vector<uint8_t>& payload);
 // Receives one message. Waits up to idle_timeout_ms for the first byte
 // (returns Timeout if nothing arrives); once a message has started, the rest
 // must arrive within a fixed stall timeout or the result is Error.

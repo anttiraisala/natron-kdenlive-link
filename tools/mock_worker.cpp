@@ -6,9 +6,11 @@
 //   --fail-frame N              reply with a worker error for frame N
 //   --hang-frame N              never answer frame N (tests the worker timeout)
 //   --exit-after N              disconnect after N jobs (tests reconnect handling)
+//   --crash-frame F             die without answering when frame F arrives (like a Natron crash)
 //   --address A                 override worker_address from config.ini
 #include <chrono>
 #include <thread>
+#include <unistd.h>
 
 #include "common.h"
 
@@ -32,6 +34,7 @@ int main(int argc, char** argv) {
   const long fail_frame = args.num("fail-frame", -1);
   const long hang_frame = args.num("hang-frame", -1);
   const long exit_after = args.num("exit-after", -1);
+  const long crash_frame = args.num("crash-frame", -1);
 
   Socket s = connect_and_handshake(addr, Role::Worker, env.token, 3000, &err);
   if (!s.valid()) {
@@ -51,8 +54,15 @@ int main(int argc, char** argv) {
     }
     if (m.h.type != static_cast<uint16_t>(MsgType::Job)) continue;
     const auto t0 = std::chrono::steady_clock::now();
-    spdlog::debug("event=job_received job={} frame={} bytes={}", m.h.request_id, m.h.frame_number, m.payload.size());
+    const std::string ntp = payload_ntp_path(m.h, m.payload);
+    if (m.h.ntp_len && m.payload.size() >= m.h.ntp_len) m.payload.resize(m.payload.size() - m.h.ntp_len);  // image only
+    spdlog::debug("event=job_received job={} frame={} bytes={} ntp=\"{}\"", m.h.request_id, m.h.frame_number,
+                  m.payload.size(), ntp);
 
+    if (m.h.frame_number == crash_frame) {
+      spdlog::warn("event=crashing frame={}", crash_frame);
+      _exit(1);
+    }
     if (m.h.frame_number == hang_frame) {
       spdlog::warn("event=hanging frame={}", hang_frame);
       std::this_thread::sleep_for(std::chrono::hours(1));
@@ -61,6 +71,7 @@ int main(int argc, char** argv) {
 
     Header h = m.h;
     h.type = static_cast<uint16_t>(MsgType::JobResult);
+    h.ntp_len = 0;
     if (m.h.frame_number == fail_frame) {
       const std::string msg = "simulated worker failure";
       h.status = static_cast<uint16_t>(Status::Error);

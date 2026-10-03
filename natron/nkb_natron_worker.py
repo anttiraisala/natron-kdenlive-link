@@ -9,9 +9,10 @@
 #   Connects to the daemon as a "worker" (same wire protocol as protocol.h) and
 #   serves render jobs. For every job:
 #     1. writes the incoming RGBA8 frame to <exchange dir>/in_<job>.tga
-#     2. loads the composition  <comps dir>/<comp_id>.ntp  (reloaded when the file
-#        changed since the last job; created as a default pass-through graph
-#        Read -> Write the first time a comp id is seen)
+#     2. loads the composition: the .ntp path sent with the job (any folder), or
+#        <comps dir>/<comp_id>.ntp without one; reloaded when the file changed since
+#        the last job; created as a default pass-through graph Read -> Write when the
+#        file does not exist
 #     3. points the node NKB_Input at the input file and NKB_Output at the output
 #        file, renders the Write node for the job's frame number,
 #     4. reads <exchange dir>/out_<job>.tga back and sends it to the daemon.
@@ -237,7 +238,7 @@ class Comp:
         self.comps_dir = comps_dir
         self.exchange_dir = exchange_dir
         self.color = color
-        self.current = None      # comp id loaded in app1
+        self.current = None      # path of the .ntp loaded in app1
         self.mtime = None
         self.read = None
         self.write = None
@@ -246,15 +247,18 @@ class Comp:
         safe = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in comp_id) or "default"
         return os.path.join(self.comps_dir, safe + ".ntp")
 
-    def ensure(self, comp_id, w, h):
-        """Returns (read_node, write_node) of the comp, loading or creating it as needed."""
-        path = self.path(comp_id)
+    def ensure(self, comp_id, ntp_path, w, h):
+        """Returns (read_node, write_node) of the comp, loading or creating it as needed.
+
+        ntp_path is the .ntp the Kdenlive effect names (any folder Natron can read; for the snap a non-hidden
+        folder in the home). Without one (older filters, or only a comp id) it is <comps dir>/<comp id>.ntp."""
+        path = ntp_path or self.path(comp_id)
         if not os.path.exists(path):
             self._create_default(comp_id, path)
         mtime = os.stat(path).st_mtime_ns
-        if self.current != comp_id or self.mtime != mtime:
+        if self.current != path or self.mtime != mtime:
             t0 = time.time()
-            reason = "first_load" if self.current is None else ("comp_changed" if self.current != comp_id else "file_changed")
+            reason = "first_load" if self.current is None else ("comp_changed" if self.current != path else "file_changed")
             app1.loadProject(path)
             self.read = app1.getNode("NKB_Input")
             self.write = app1.getNode("NKB_Output")
@@ -263,13 +267,13 @@ class Comp:
                 raise RuntimeError("comp %s has no node named NKB_Input and NKB_Output" % path)
             self._apply_conventions()
             self._warm_up(w, h)
-            self.current, self.mtime = comp_id, mtime
+            self.current, self.mtime = path, mtime
             log("info", "comp_loaded", comp=comp_id, path=path, reason=reason, load_ms="%.0f" % ((time.time() - t0) * 1000))
         return self.read, self.write
 
     def _create_default(self, comp_id, path):
         """Default pass-through graph: NKB_Input -> NKB_Output."""
-        os.makedirs(self.comps_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         app1.resetProject()
         r = app1.createNode("fr.inria.built-in.Read")
         r.setScriptName("NKB_Input")
@@ -321,12 +325,17 @@ class Comp:
 
 # --------------------------------------------------------------------- jobs --
 def process_job(comp, exch, fields, payload, keep):
-    (_m, _v, _t, job_id, frame, w, h, pf, alpha, cs, _st, _fl, _to, _r0, key_hi, key_lo, _ps, comp_raw) = fields
+    (_m, _v, _t, job_id, frame, w, h, pf, alpha, cs, _st, _fl, _to, ntp_len, key_hi, key_lo, _ps, comp_raw) = fields
     comp_id = comp_raw.split(b"\0", 1)[0].decode(errors="replace") or "default"
     t0 = time.time()
+    # The payload is the image, followed by ntp_len bytes of the .ntp path (see Header::ntp_len).
+    ntp_path = ""
+    if ntp_len and ntp_len <= len(payload):
+        ntp_path = bytes(payload[len(payload) - ntp_len:]).decode("utf-8", errors="replace")
+        payload = payload[:len(payload) - ntp_len]
     if pf != PF_RGBA8 or len(payload) != w * h * 4:
         raise ValueError("only RGBA8 frames are supported by this worker (format=%d, bytes=%d)" % (pf, len(payload)))
-    read, write = comp.ensure(comp_id, w, h)
+    read, write = comp.ensure(comp_id, ntp_path, w, h)
     t_load = time.time()
 
     in_path = os.path.join(exch, "in_%d.tga" % job_id)

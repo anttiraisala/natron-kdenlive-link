@@ -170,6 +170,32 @@ stop_daemon
 sleep 0.3
 kill -0 "$W2" 2>/dev/null && fail "worker $W2 still running after the daemon stopped" || pass "stopping the daemon stops its worker"
 
+echo "== crash protection: a composition that keeps killing the worker is quarantined"
+write_config "unix:$ROOT/s7.sock" "unix:$ROOT/w7.sock" buffer_skip 512 10
+: > "$ROOT/log.txt"
+mkdir -p "$ROOT/my project"
+CP="$ROOT/my project/crashy comp.ntp"; echo "v1" > "$CP"
+start_daemon
+for n in 1 2 3; do
+  start_worker --mode invert --crash-frame 5
+  "$BIN/nkb-mock-filter" --comp crashy --ntp "$CP" --start 5 --frames 1 --seed $n --timeout-ms 3000 >/dev/null 2>&1
+  for _ in $(seq 1 50); do kill -0 "$WPID" 2>/dev/null || break; sleep 0.1; done  # it should have crashed
+  kill -9 "$WPID" 2>/dev/null
+done
+grep -q "event=comp_quarantined comp=\"$CP\" crashes=3" "$ROOT/log.txt" && [ "$(stat_of comps_quarantined)" = "1" ] \
+   && pass "3 crashes in a row on one composition quarantine it" || fail "quarantine: $(grep -E 'comp_(crashed|quarantined)' "$ROOT/log.txt" | cut -c1-160)"
+grep -q "\[mock-worker\].*event=job_received .*ntp=\"$CP\"" "$ROOT/log.txt" \
+   && pass "the .ntp path (any folder, with spaces) reaches the worker" || fail "path not seen by worker: $(grep job_received "$ROOT/log.txt" | head -1)"
+start_worker --mode invert --crash-frame 5
+OUT=$("$BIN/nkb-mock-filter" --comp crashy --ntp "$CP" --start 5 --frames 1 --seed 9 --timeout-ms 3000 2>/dev/null)
+echo "$OUT" | grep -q "error=1" && [ "$(stat_of workers)" = "1" ] \
+   && pass "a quarantined composition is refused at once and the worker survives" || fail "refusal: $OUT workers=$(stat_of workers)"
+sleep 1.1; echo "v2" > "$CP"
+OUT=$("$BIN/nkb-mock-filter" --comp crashy --ntp "$CP" --start 6 --frames 2 --seed 10 --timeout-ms 3000 2>/dev/null)
+echo "$OUT" | grep -q "ok=2" && grep -q "event=comp_released comp=\"$CP\" reason=\"file changed\"" "$ROOT/log.txt" \
+   && pass "saving the composition again lifts the quarantine" || fail "release: $OUT"
+kill "$WPID" 2>/dev/null; stop_daemon
+
 echo "== log is structured"
 grep -q "event=job_done" "$ROOT/log.txt" && grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z \[' "$ROOT/log.txt" \
    && pass "log lines have ISO timestamp, level and event=" || fail "log format"

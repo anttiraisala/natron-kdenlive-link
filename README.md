@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.4.3, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.5.0, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -275,7 +275,9 @@ The name is picked when the effect renders its first frame, so the timeline curs
 * The daemon starts Natron, so it must be running; Natron's window appears on the display of the terminal the daemon was started from. Natron's own messages go to `~/NatronKdenliveLink/logs/natron-gui.log`.
 * The command is set in `config.ini`, see [Configuration](#configuration); for the Natron tarball set `gui_command` to the tarball's `Natron`.
 
-**To use another composition**, choose a different file in `~/NatronKdenliveLink/comps/` with the **Natron project (.ntp)** field; the worker uses it from the next frame on. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx`. For now the chosen file must be in `~/NatronKdenliveLink/comps/`: the worker loads `comps/<file name>`, not a file in another folder.
+**To use another composition**, choose a different `.ntp` with the **Natron project (.ntp)** field, in any folder (for example next to your Kdenlive project, so it is backed up with it); the worker loads exactly that file from the next frame on, and creates it as a pass-through graph if it does not exist yet. With the Natron snap the folder must be in your home and not hidden (no `.` in the path), because the snap cannot read other places. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx` in `~/NatronKdenliveLink/comps/`.
+
+**Crash protection.** If the worker dies while rendering a composition (Natron crashed) three times in a row, that composition is set aside: its frames pass through unprocessed and the worker is not sent them, so the other clips keep rendering. Saving the composition again in Natron lifts it. The log says `comp_quarantined` and `comp_released`; `natron-kdenlive-cache --status` shows `comps_quarantined`. The limit is `crash_limit` in `config.ini`.
 
 ### Stopping everything
 
@@ -297,6 +299,7 @@ The daemon writes a fully commented `~/NatronKdenliveLink/config.ini` on first s
 | `cache_memory_mb` | 1024 | Output cache size, kept between `cache_memory_min_mb` (256) and `cache_memory_max_mb` (5120) |
 | `input_queue_memory_mb` | 512 | Frames waiting for Natron |
 | `buffer_behavior` | `buffer_skip` | When the queue is full: `buffer_skip`, `pause` or `show_cached` |
+| `crash_limit` | 3 | A composition that made the worker die this many times in a row is set aside until saved again; 0 = off |
 | `natron_timeout_seconds` | 10 | A worker needing longer for one frame is dropped |
 | `no_worker_wait_ms` | 0 | How long a request waits while no worker is connected |
 | `[natron] start_worker` | `true` | The daemon starts the Natron worker and restarts it when it exits (after 2 s; up to 60 s if it keeps dying) |
@@ -344,24 +347,36 @@ When something fails, the log and the output of `natron-kdenlive-doctor` are eno
 | Daemon prints `Address already in use` | An old daemon is still running. Stop it with `pkill -9 -f natron-kdenlive-daemon` |
 | "Natron Link" is not in the effects list | Kdenlive needs the module and the effect XML in the extracted AppImage. Re-run `tools/install-filter.sh install ~/apps/kdenlive/squashfs-root`; start Kdenlive with `~/apps/kdenlive/squashfs-root/AppRun`, not the original `.AppImage`. A log line `Invalid metadata for natron_link` means an old module without MLT metadata |
 | Clip looks unprocessed | Check `./build/natron-kdenlive-cache --status`. `workers=0` means no worker is connected, and frames pass through. The daemon restarts a crashed worker within seconds; `grep worker_ ~/NatronKdenliveLink/logs/natron-kdenlive.log` shows what happened and `logs/natron-worker.log` Natron's own messages. Also check that the composition is saved (no `*` in Natron's title) |
+| One clip stays unprocessed, others work | `grep comp_quarantined ~/NatronKdenliveLink/logs/natron-kdenlive.log`: that composition crashed Natron three times in a row. Fix the graph in Natron and save it; the next frame is tried again |
 | Export is unprocessed | Look for `export_frame_unprocessed` in the log. Start the worker before rendering, or raise `no_worker_wait_ms` |
 | Natron snap cannot reach files | The snap sees only non-hidden folders in your home. Keep the exchange folder visible (`NKB_EXCHANGE_DIR`) and use `tcp:` addresses |
 
 ## Status and verification
 
-Verified on the author's machine (Ubuntu 24.04.4):
+Verified on the author's machines (Ubuntu 24.04.4 and Linux Mint, Kdenlive 26.08.1 AppImage, Natron 2.5.0 snap):
 
 * Build and all tests of the daemon, protocol, cache and tools.
 * The filter built against MLT 7.40.0 loads in the Kdenlive 26.08.1 AppImage (MLT 7.41.0), appears in the effects list, processes playback and renders with the test worker, and passes frames through immediately when no worker is connected.
 * Natron 2.5.0 snap: the complete worker test (`tests/natron_e2e.sh` over loopback TCP) passes: pass-through accuracy, cache, Invert graph, reload on file change, warm-up, broken composition and recovery, sRGB mode.
 * **Milestone 4, the real chain:** Kdenlive 26.08.1 (AppImage) with the real worker in the Natron 2.5.0 snap, 1080p. In one session, 1365 preview frames went through the filter (1099 from the cache, the rest rendered by Natron or passed through while a render was still running) and a Kdenlive render of 78 frames was recognised as an export and fully processed (no `export_frame_unprocessed`). 338 Natron jobs, none failed, about 180 ms per frame.
 * Choosing a composition with the effect panel's **Natron project (.ntp)** field, switching between compositions, and editing a composition in the Natron GUI while the worker runs (the worker reloads the saved file and the new result shows up).
+* Each new effect gets its own `comp-xxxxxx` composition; the names survive saving and reopening the Kdenlive project.
+* **Open in Natron**: Natron opens the effect's composition showing the clip's current frame in the viewer; a second click brings the open window to the front (wmctrl).
+* Graphs with Invert, CheckerBoard and CornerPin come back to Kdenlive correctly.
+* The daemon starts the Natron worker and restarts it after it is killed or crashes (Natron segfaults were seen in practice; one, caused by the worker's tiny warm-up frame with CornerPin, is fixed).
 
 Verified only in the author's development container:
 
-* The full Natron worker test suite against the headless Natron 2.5.0 tarball: pass-through accuracy, Invert graph, sRGB and raw color modes, reload on file change, broken composition, 1080p timing.
+* The full Natron worker test suite against the headless Natron 2.5.0 tarball: pass-through accuracy, Invert graph, sRGB and raw color modes, reload on file change, broken composition, 1080p timing, compositions in other folders (paths with spaces), CornerPin without the warm-up crash.
+* Open in Natron with the real Natron GUI on a virtual display: the composition is created or loaded, the viewer shows the clip's pixels exactly.
+* Crash protection: three worker crashes on one composition quarantine it, the worker survives further requests, saving the file lifts it (with a test worker that crashes on purpose).
 
-Not verified yet:
+Not verified on the author's machine yet:
+
+* A composition chosen outside `~/NatronKdenliveLink/comps/` (container tests pass; the snap must be able to read the folder).
+* Crash protection with a real Natron crash (the known crash is fixed; tested with a test worker).
+
+Not verified at all:
 
 * Other Kdenlive, MLT or Natron versions, the Kdenlive snap, and other distributions.
 
@@ -370,9 +385,10 @@ Not verified yet:
 * One Natron project is loaded per worker; alternating compositions every frame is slow (a reload takes 60 to 120 ms).
 * Only RGBA 8-bit frames are supported so far. The protocol already carries other formats.
 * Natron works on premultiplied data. For semi-transparent pixels, use Unpremult, the effect, then Premult. Color precision drops for very low alpha.
+* Natron itself can crash on some graphs. The daemon restarts the worker, and a composition that crashes it three times in a row is set aside until it is saved again (see "Crash protection").
+* New compositions are created in `~/NatronKdenliveLink/comps/`, not automatically next to the Kdenlive project: an MLT filter is not told where the project file is. Choose or type a path next to the project in the **Natron project (.ntp)** field to keep a composition there.
 * Natron 2.5.0 quirks the worker works around: a wrong first render after loading a project (it renders a throw-away frame of the job's size; a tiny one made Natron crash with CornerPin), color spaces reset whenever a filename changes (it sets them for every job), failed renders that do not raise errors, and a crash at interpreter exit (the worker exits with `os._exit`).
 * Copying an effect in Kdenlive may copy its composition name too, so both effects share one composition. Choose another file for one of them if that is not wanted.
-* A Natron project file in a folder other than `~/NatronKdenliveLink/comps/` is not supported yet (see "To use another composition" above).
 * A Kdenlive filter attaches to a clip, a track or the master. It cannot add menus, create tracks or act as a true adjustment layer.
 
 ## Roadmap

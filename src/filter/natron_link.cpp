@@ -345,10 +345,12 @@ Answer ask_daemon(const Params& p, const Key& key, const uint8_t* rgba, uint32_t
   rq.key_lo = key.lo;
   set_comp_id(rq, p.comp);
 
-  auto exchange = [&](Header h, const void* payload, size_t n, int wait_ms, Message* reply) {
+  auto exchange = [&](Header h, const void* payload, size_t n, int wait_ms, Message* reply,
+                      const std::string& tail = std::string()) {
     h.request_id = c->next_id++;
+    h.ntp_len = static_cast<uint32_t>(tail.size());
     std::string err;
-    if (!send_message(c->sock.fd(), h, payload, n, &err)) {
+    if (!send_message(c->sock.fd(), h, payload, n, tail.data(), tail.size(), &err)) {
       drop_connection(err.c_str());
       return false;
     }
@@ -384,7 +386,9 @@ Answer ask_daemon(const Params& p, const Key& key, const uint8_t* rgba, uint32_t
   // Step 2: cache miss, send the frame.
   Header full = rq;
   full.timeout_ms = static_cast<uint32_t>(p.timeout_ms);
-  if (!exchange(full, rgba, bytes, p.timeout_ms, &reply)) return ans;
+  // The .ntp path travels after the image, so the worker loads exactly this file.
+  const std::string ntp = p.ntp.size() <= kMaxNtpLen ? p.ntp : std::string();
+  if (!exchange(full, rgba, bytes, p.timeout_ms, &reply, ntp)) return ans;
   if (accept_image(reply, false)) return ans;
   ans.status = static_cast<Status>(reply.h.status);
   return ans;

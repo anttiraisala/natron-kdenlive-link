@@ -67,6 +67,9 @@ const Spec kSpecs[] = {
     {"daemon", "no_worker_wait_ms", "0", Type::Int, 0, 600000, "",
      "While no Natron worker is connected, a request waits at most this long (0 = answer\n"
      "# immediately with pass-through). Frames are still queued and rendered when a worker connects."},
+    {"daemon", "crash_limit", "3", Type::Int, 0, 100, "",
+     "A composition that made the worker die this many times in a row gets no more frames (they pass\n"
+     "# through unprocessed) until its .ntp file changes, i.e. until it is saved again. 0 = off."},
     {"daemon", "max_frame_mb", "1024", Type::Int, 1, 65536, "",
      "Largest single frame accepted (protects against corrupt headers)."},
     {"daemon", "stats_log_interval_seconds", "5", Type::Int, 0, 3600, "",

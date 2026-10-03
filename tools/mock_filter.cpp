@@ -6,6 +6,7 @@
 //   --frames N --start F        frame range (default 10 frames from 0)
 //   --width W --height H        default 320x180, RGBA8
 //   --comp NAME                 composition id (part of the key)
+//   --ntp PATH                  .ntp path sent after the image (the worker loads that file)
 //   --seed S                    changes the input content, and therefore the keys
 //   --timeout-ms T              per request wait; 0 = queue only (playback mode)
 //   --expect-transform invert|passthrough|srgb-invert   what the worker should have done
@@ -98,6 +99,7 @@ int main(int argc, char** argv) {
   const long frames = args.num("frames", 10), start = args.num("start", 0);
   const uint32_t w = static_cast<uint32_t>(args.num("width", 320)), h = static_cast<uint32_t>(args.num("height", 180));
   const std::string comp = args.str("comp", "comp_test");
+  const std::string ntp = args.str("ntp", "");
   const long seed = args.num("seed", 1);
   const long timeout_ms = args.num("timeout-ms", 2000);
   const std::string tf = args.str("expect-transform", "invert");
@@ -150,7 +152,8 @@ int main(int argc, char** argv) {
     if (reply.h.status == static_cast<uint16_t>(Status::Miss)) {
       Header full = rq;
       full.timeout_ms = static_cast<uint32_t>(timeout_ms);
-      if (!send_message(s.fd(), full, input.data(), input.size(), &err) ||
+      full.ntp_len = static_cast<uint32_t>(ntp.size());
+      if (!send_message(s.fd(), full, input.data(), input.size(), ntp.data(), ntp.size(), &err) ||
           recv_message(s.fd(), reply, 60000, 1ull << 32, &err) != RecvResult::Ok) {
         spdlog::error("event=request_failed frame={} reason=\"{}\"", f, err);
         std::printf("summary connection_lost=1\n");

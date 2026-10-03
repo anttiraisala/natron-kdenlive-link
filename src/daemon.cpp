@@ -18,8 +18,18 @@
 //   Job         guarded by its own mutex; filters wait on it, workers complete it
 //   launcher_   "Open in Natron" (NatronLauncher, own mutex, own background threads)
 //   supervisor_ starts the Natron worker and restarts it when it exits (own thread)
+//   crashes_    per composition: crashes in a row, quarantine (guarded by crash_m_)
+//
+// CRASH PROTECTION
+//   If the worker dies while rendering a job (the connection closes mid-job: Natron
+//   crashed), the job's composition gets a strike. After [daemon] crash_limit strikes in
+//   a row it is quarantined: its requests are answered with an error at once, so frames
+//   pass through and the restarted worker is not killed again. The quarantine ends when
+//   the composition's .ntp file changes (saved again) or the daemon restarts. A
+//   composition is identified by the .ntp path in the request, or by its comp id.
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <chrono>
 #include <condition_variable>
@@ -412,6 +422,28 @@ class Daemon {
   FrameCache cache_;
   NatronLauncher launcher_;
   WorkerSupervisor supervisor_;
+
+  // ---- crash protection
+  struct CrashRecord {
+    int in_a_row = 0;
+    bool quarantined = false;
+    std::string file;        // .ntp watched for changes
+    int64_t mtime_ns = -1;   // of file when quarantined (-1 = missing)
+  };
+  static std::string comp_identity(const Header& h, const std::vector<uint8_t>& payload, std::string* file);
+  static int64_t file_mtime_ns(const std::string& path);
+  void record_crash(const std::shared_ptr<Job>& job, uint64_t conn);
+  void record_success(const std::shared_ptr<Job>& job);
+  bool is_quarantined(const std::string& id, std::string* why);
+  uint64_t quarantined_count() {
+    std::lock_guard<std::mutex> lk(crash_m_);
+    uint64_t n = 0;
+    for (auto& [id, c] : crashes_) n += c.quarantined ? 1 : 0;
+    return n;
+  }
+  std::mutex crash_m_;
+  std::map<std::string, CrashRecord> crashes_;
+  int crash_limit_ = 3;
   Address filter_addr_, worker_addr_;
   Socket filter_listener_, worker_listener_;
   Behavior behavior_ = Behavior::BufferSkip;
@@ -450,6 +482,7 @@ bool Daemon::start(std::string* err) {
     return false;
   }
   launcher_.configure(cfg_);
+  crash_limit_ = static_cast<int>(cfg_.get_int("daemon", "crash_limit"));
   supervisor_.configure(cfg_, launcher_.scripts_dir());
 
   // Cache budget = target clamped into [min, max].
@@ -675,14 +708,18 @@ bool Daemon::handle_frame_request(Socket& s, Message& m, uint64_t conn) {
                   h.request_id, comp, h.frame_number, key.hex());
     return reply_status(s, h, Status::Miss, "");
   }
-  if (m.payload.size() != expected) {
-    spdlog::warn("event=bad_request conn={} request_id={} reason=\"payload size mismatch\" got={} expected={}", conn,
-                 h.request_id, m.payload.size(), expected);
+  if (h.ntp_len > kMaxNtpLen || m.payload.size() != expected + h.ntp_len) {
+    spdlog::warn("event=bad_request conn={} request_id={} reason=\"payload size mismatch\" got={} expected={} ntp_len={}",
+                 conn, h.request_id, m.payload.size(), expected, h.ntp_len);
     return reply_status(s, h, Status::Error, "payload size does not match geometry");
   }
 
   spdlog::debug("event=cache_miss conn={} request_id={} comp={} frame={} key={} bytes={} timeout_ms={}", conn,
                 h.request_id, comp, h.frame_number, key.hex(), m.payload.size(), timeout_ms);
+  {
+    std::string why;
+    if (is_quarantined(comp_identity(h, m.payload, nullptr), &why)) return reply_status(s, h, Status::Error, why);
+  }
   auto input = std::make_shared<std::vector<uint8_t>>(std::move(m.payload));
   Submit sub = submit(key, h, input, timeout_ms);
   if (!sub.job) {
@@ -872,6 +909,13 @@ void Daemon::serve_worker(Socket& s, uint64_t conn) {
       }
       continue;
     }
+    {
+      std::string why;  // queued before its composition was quarantined
+      if (is_quarantined(comp_identity(job->req, *job->input, nullptr), &why)) {
+        finish(job, Status::Error, nullptr, why);
+        continue;
+      }
+    }
     const double queued_ms = ms_since(job->enqueued);
     Header h = job->req;
     h.type = static_cast<uint16_t>(MsgType::Job);
@@ -896,6 +940,7 @@ void Daemon::serve_worker(Socket& s, uint64_t conn) {
                     "worker_timeout_s={}",
                     job->id, conn, job->key.hex(), job->req.frame_number, why, err, ms_since(t0),
                     worker_timeout_ms_ / 1000);
+      if (r == RecvResult::Closed) record_crash(job, conn);  // the worker died while rendering this job
       finish(job, r == RecvResult::Timeout ? Status::Timeout : Status::Error, nullptr, why);
       return;  // drop the connection; a restarted worker reconnects
     }
@@ -935,8 +980,73 @@ void Daemon::serve_worker(Socket& s, uint64_t conn) {
                   "cache_entries={} cache_mb={:.1f} evicted={}",
                   job->id, conn, job->key.hex(), job->req.frame_number, ms_since(t0), queued_ms, frame->data.size(),
                   cs.entries, cs.bytes / 1048576.0, evicted);
+    record_success(job);
     finish(job, Status::Ok, frame, "");
   }
+}
+
+// ---------------------------------------------------- crash protection -----
+std::string Daemon::comp_identity(const Header& h, const std::vector<uint8_t>& payload, std::string* file) {
+  const std::string ntp = payload_ntp_path(h, payload);
+  if (!ntp.empty()) {
+    if (file) *file = ntp;
+    return ntp;
+  }
+  const std::string comp = get_comp_id(h);
+  if (file) {  // the worker's default location of a comp without a path (same characters rule)
+    std::string safe;
+    for (unsigned char c : comp) safe += (std::isalnum(c) || c == '-' || c == '_' || c == '.') ? static_cast<char>(c) : '_';
+    *file = home_dir() + "/comps/" + (safe.empty() ? "default" : safe) + ".ntp";
+  }
+  return "comp:" + comp;
+}
+
+int64_t Daemon::file_mtime_ns(const std::string& path) {
+  struct stat st;
+  if (stat(path.c_str(), &st) != 0) return -1;
+  return static_cast<int64_t>(st.st_mtim.tv_sec) * 1000000000 + st.st_mtim.tv_nsec;
+}
+
+void Daemon::record_crash(const std::shared_ptr<Job>& job, uint64_t conn) {
+  if (crash_limit_ <= 0) return;
+  std::string file;
+  const std::string id = comp_identity(job->req, *job->input, &file);
+  std::lock_guard<std::mutex> lk(crash_m_);
+  CrashRecord& c = crashes_[id];
+  ++c.in_a_row;
+  spdlog::warn("event=comp_crashed comp=\"{}\" frame={} conn={} in_a_row={} limit={}", id, job->req.frame_number, conn,
+               c.in_a_row, crash_limit_);
+  if (c.in_a_row >= crash_limit_ && !c.quarantined) {
+    c.quarantined = true;
+    c.file = file;
+    c.mtime_ns = file_mtime_ns(file);
+    spdlog::error("event=comp_quarantined comp=\"{}\" crashes={} file=\"{}\" reason=\"the worker died {} times in a row "
+                  "on this composition; its frames pass through until the file is saved again\"",
+                  id, c.in_a_row, file, c.in_a_row);
+  }
+}
+
+void Daemon::record_success(const std::shared_ptr<Job>& job) {
+  if (crash_limit_ <= 0) return;
+  const std::string id = comp_identity(job->req, *job->input, nullptr);
+  std::lock_guard<std::mutex> lk(crash_m_);
+  if (auto it = crashes_.find(id); it != crashes_.end() && !it->second.quarantined) crashes_.erase(it);
+}
+
+bool Daemon::is_quarantined(const std::string& id, std::string* why) {
+  if (crash_limit_ <= 0) return false;
+  std::lock_guard<std::mutex> lk(crash_m_);
+  auto it = crashes_.find(id);
+  if (it == crashes_.end() || !it->second.quarantined) return false;
+  const int64_t now = file_mtime_ns(it->second.file);
+  if (now != it->second.mtime_ns) {
+    spdlog::info("event=comp_released comp=\"{}\" reason=\"file changed\"", id);
+    crashes_.erase(it);
+    return false;
+  }
+  *why = "composition " + id + " made Natron crash " + std::to_string(it->second.in_a_row) +
+         " times in a row; save it again in Natron to retry";
+  return true;
 }
 
 // -------------------------------------------------------------- stats ------
@@ -955,7 +1065,8 @@ std::vector<std::pair<std::string, uint64_t>> Daemon::stats_pairs() {
           {"inflight_jobs", inf},            {"jobs_submitted", n_submitted_}, {"jobs_completed", n_completed_},
           {"jobs_skipped", n_skipped_},      {"jobs_rejected", n_rejected_},  {"jobs_deduplicated", n_dedup_},
           {"jobs_failed", n_job_errors_},    {"waiter_timeouts", n_waiter_timeouts_},
-          {"workers", static_cast<uint64_t>(n_workers_.load())}, {"worker_connections", n_worker_connections_.load()}, {"filters", static_cast<uint64_t>(n_filters_.load())}};
+          {"workers", static_cast<uint64_t>(n_workers_.load())}, {"worker_connections", n_worker_connections_.load()}, {"filters", static_cast<uint64_t>(n_filters_.load())},
+          {"comps_quarantined", quarantined_count()}};
 }
 
 std::string Daemon::stats_text() {

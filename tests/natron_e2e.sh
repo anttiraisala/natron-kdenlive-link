@@ -117,6 +117,16 @@ start_worker || { fail "worker restart (srgb)"; exit 1; }
 OUT=$("$BIN/nkb-mock-filter" --comp invert_rgb --seed 5 --frames 3 --width 640 --height 360 --alpha-min 255 --tolerance 3 --expect-transform srgb-invert --expect ok=3 --timeout-ms 60000)
 echo "$OUT" | grep -q "ok=3" && echo "$OUT" | grep -q "mismatches=0" && pass "srgb mode: Invert acts in linear light: $(echo "$OUT" | grep -o 'max_rgb_err=[0-9]*')" || fail "srgb invert: $OUT"
 
+echo "== a .ntp in any folder: the worker loads the file the effect names"
+mkdir -p "$ROOT/my project/natron"
+cp "$NKB_COMPS_DIR/invert_rgb.ntp" "$ROOT/my project/natron/my invert.ntp"
+OUT=$("$BIN/nkb-mock-filter" --comp myinvert --ntp "$ROOT/my project/natron/my invert.ntp" --seed 30 --frames 2 --width 640 --height 360 --alpha-min 255 --tolerance 3 --expect-transform srgb-invert --expect ok=2 --timeout-ms 60000)
+echo "$OUT" | grep -q "ok=2" && echo "$OUT" | grep -q "mismatches=0" && grep -q "comp_loaded comp=myinvert path=\"$ROOT/my project/natron/my invert.ntp\"" "$ROOT/log.txt" \
+   && pass "Invert comp in another folder (path with spaces) used: $(echo "$OUT" | grep -o 'max_rgb_err=[0-9]*')" || fail "other folder: $OUT"
+OUT=$("$BIN/nkb-mock-filter" --comp newone --ntp "$ROOT/my project/natron/new one.ntp" --seed 31 --frames 1 --width 64 --height 36 --alpha-min 64 --tolerance 3 --expect-transform passthrough --expect ok=1 --timeout-ms 60000)
+echo "$OUT" | grep -q "ok=1" && [ -f "$ROOT/my project/natron/new one.ntp" ] \
+   && pass "a missing .ntp in another folder is created there as pass-through" || fail "create elsewhere: $OUT"
+
 stop_worker
 
 echo

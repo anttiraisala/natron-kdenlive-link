@@ -166,6 +166,21 @@ bool send_message(int fd, Header h, const void* payload, size_t n, std::string* 
   return true;
 }
 
+bool send_message(int fd, Header h, const void* payload, size_t n, const void* tail, size_t tail_n, std::string* err) {
+  h.magic = kMagic;
+  h.version = kProtocolVersion;
+  h.payload_size = n + tail_n;
+  if (!send_all(fd, &h, sizeof h, n + tail_n ? MSG_MORE : 0, err)) return false;
+  if (n && !send_all(fd, payload, n, tail_n ? MSG_MORE : 0, err)) return false;
+  if (tail_n && !send_all(fd, tail, tail_n, 0, err)) return false;
+  return true;
+}
+
+std::string payload_ntp_path(const Header& h, const std::vector<uint8_t>& payload) {
+  if (h.ntp_len == 0 || h.ntp_len > kMaxNtpLen || h.ntp_len > payload.size()) return "";
+  return std::string(payload.end() - h.ntp_len, payload.end());
+}
+
 static RecvResult map_result(int r) {
   switch (r) {
     case 0: return RecvResult::Ok;
