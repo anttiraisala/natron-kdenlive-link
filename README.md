@@ -271,6 +271,8 @@ cd ~/projects-own/natron-kdenlive-link
 
 The name is picked when the effect renders its first frame, so the timeline cursor has to be over the clip (or the clip has to be played) once. Kdenlive's effect panel does not show the new path right away, because the panel shows its own copy of the values. To see it, switch the effect off and on again with its enable button (observed with Kdenlive 26.08.1). The log also names it: `grep comp_assigned ~/NatronKdenliveLink/logs/natron-kdenlive.log`.
 
+**Alpha matters.** The alpha channel that comes out of the graph is used as is. Several Natron nodes also change alpha by default; for example the **Invert** node inverts R, G, B **and A**, so an opaque clip comes back fully transparent and Kdenlive shows it as black (or shows the track below it). Untick **A** in the Invert node's channel checkboxes to invert only the colors. The same applies to any node whose output looks black: check what it does to alpha.
+
 **To use another composition**, choose a different file in `~/NatronKdenliveLink/comps/` with the **Natron project (.ntp)** field; the worker uses it from the next frame on. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx`. For now the chosen file must be in `~/NatronKdenliveLink/comps/`: the worker loads `comps/<file name>`, not a file in another folder.
 
 ### Stopping everything
