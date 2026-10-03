@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!DOCTYPE kpartgui>
+<effect xmlns="https://www.kdenlive.org" tag="natron_link" id="natron_link">
+    <name>Natron Link</name>
+    <description>Sends the frames beneath this effect to Natron (through the natron-kdenlive-daemon) and shows the result. If Natron is not available or too slow, the unprocessed frame is shown.</description>
+    <author>kdenlive-natron-bridge</author>
+    <parameter type="url" name="ntp" default="">
+        <name>Natron project (.ntp)</name>
+        <filter>Natron project (*.ntp)</filter>
+    </parameter>
+    <parameter type="list" name="mode" paramlist="auto;playback;export" default="auto">
+        <name>Mode</name>
+        <paramlistdisplay>Auto,Playback,Export</paramlistdisplay>
+    </parameter>
+    <parameter type="constant" name="playback_timeout_ms" max="5000" min="0" default="250">
+        <name>Playback wait (ms)</name>
+    </parameter>
+</effect>

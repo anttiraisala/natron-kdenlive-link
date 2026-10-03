@@ -1,0 +1,190 @@
+
+# 1. Install packages
+
+sudo apt update
+sudo apt install -y build-essential cmake ninja-build git pkg-config \
+    libspdlog-dev libfmt-dev libxml2-dev \
+    gdb valgrind
+
+sudo apt update && sudo apt install -y build-essential cmake ninja-build git pkg-config libspdlog-dev libfmt-dev libxml2-dev gdb valgrind
+
+
+# 2. Verify the toolchain
+
+g++ --version          # expect 13.x
+cmake --version        # expect 3.28 or newer
+ninja --version
+pkg-config --modversion spdlog    # expect 1.12.x
+
+
+rm -rf ~/natron-kdenlive-work
+rm -rf ~/opt/mlt-7.40.0
+
+
+mkdir -p "$HOME/projects-own/kdenlive-natron-bridge/third-party" "$HOME/projects-own/kdenlive-natron-bridge/logs"
+
+git clone --branch v7.40.0 --depth 1 https://github.com/mltframework/mlt.git "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-src" 2>&1 | tee "$HOME/projects-own/kdenlive-natron-bridge/logs/clone.log"
+
+cmake -S "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-src" -B "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-src/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-7.40.0" \
+    -DBUILD_TESTING=OFF \
+    -DGPL=OFF -DGPL3=OFF \
+    -DMOD_AVFORMAT=OFF -DMOD_DECKLINK=OFF -DMOD_FREI0R=OFF -DMOD_GDK=OFF \
+    -DMOD_GLAXNIMATE_QT6=OFF -DMOD_JACKRACK=OFF -DMOD_KDENLIVE=OFF \
+    -DMOD_MOVIT=OFF -DMOD_NDI=OFF -DMOD_NORMALIZE=OFF -DMOD_OLDFILM=OFF \
+    -DMOD_OPENCV=OFF -DMOD_OPENFX=OFF -DMOD_PLUS=OFF -DMOD_PLUSGPL=OFF \
+    -DMOD_QT6=OFF -DMOD_RESAMPLE=OFF -DMOD_RTAUDIO=OFF -DMOD_RUBBERBAND=OFF \
+    -DMOD_RNNOISE=OFF -DMOD_SDL1=OFF -DMOD_SDL2=OFF -DMOD_SOX=OFF \
+    -DMOD_SPATIALAUDIO=OFF -DMOD_VIDSTAB=OFF -DMOD_VORBIS=OFF -DMOD_XINE=OFF \
+    2>&1 | tee "$HOME/projects-own/kdenlive-natron-bridge/logs/cmake-configure.log"
+
+
+cmake --build "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-src/build" 2>&1 | tee "$HOME/projects-own/kdenlive-natron-bridge/logs/cmake-build.log"
+
+cmake --install "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-src/build" 2>&1 | tee "$HOME/projects-own/kdenlive-natron-bridge/logs/cmake-install.log"
+
+PKG_CONFIG_PATH="$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-7.40.0/lib/pkgconfig" pkg-config --modversion mlt-framework-7
+ls "$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-7.40.0/include/mlt-7/framework" | head -5
+
+
+
+
+cd ~/projects-own
+tar -xzf ~/Downloads/kdenlive-natron-bridge-m1.tar.gz
+cd kdenlive-natron-bridge
+sudo apt install -y libspdlog-dev libfmt-dev      # already installed on your machine
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
+
+
+
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; sleep 1
+pgrep -af "natron-kdenlive-daemon|nkb-mock-worker" || echo "all stopped"
+
+
+
+
+cd ~/projects-own/kdenlive-natron-bridge
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; sleep 1
+nohup ./build/natron-kdenlive-daemon > /tmp/nkb-daemon.out 2>&1 &
+sleep 1
+nohup ./build/nkb-mock-worker --mode invert --delay-ms 100 > /tmp/nkb-worker.out 2>&1 &
+sleep 1
+./build/natron-kdenlive-cache --status | grep -E "^workers="
+
+
+# Group 1: stop all (Terminal A)
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; sleep 1
+pgrep -af "natron-kdenlive-daemon|nkb-mock-worker" || echo "all stopped"
+
+# Group 2: restart daemon and mock worker (Terminal A)
+# The last line must print workers=1. If it does not, run cat /tmp/nkb-daemon.out and send me the output.
+cd ~/projects-own/kdenlive-natron-bridge
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; sleep 1
+nohup ./build/natron-kdenlive-daemon > /tmp/nkb-daemon.out 2>&1 &
+sleep 1
+nohup ./build/nkb-mock-worker --mode invert --delay-ms 100 > /tmp/nkb-worker.out 2>&1 &
+sleep 1
+./build/natron-kdenlive-cache --status | grep -E "^workers="
+
+# Group 3: start Kdenlive (Terminal B)
+~/apps/kdenlive/squashfs-root/AppRun 2>&1 | tee /tmp/kdenlive-out.txt
+
+# Group 4: set the log marker (Terminal A)
+LOG=~/NatronKdenliveLink/logs/natron-kdenlive.log
+wc -l < $LOG > /tmp/nkb-mark.txt
+cat /tmp/nkb-mark.txt
+
+# Group A: apply the new version (Terminal A)
+cd ~/projects-own
+tar -xzf ~/Downloads/kdenlive-natron-bridge-m2.3.tar.gz
+cd kdenlive-natron-bridge
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+      -DMLT_ROOT=$HOME/projects-own/kdenlive-natron-bridge/third-party/mlt-7.40.0
+cmake --build build
+ctest --test-dir build --output-on-failure
+
+# Group B: reinstall the module into the AppImage.
+# This step is needed because the module changed. Close Kdenlive first.
+# It must print OK: the AppImage's MLT loaded libmltnatron.so and created the filter.
+tools/install-filter.sh install ~/apps/kdenlive/squashfs-root
+
+# Group C: restart daemon and mock worker, with a slower worker.
+# workers=1 must print. The last command clears the cache, so the render has to process every frame.
+cd ~/projects-own/kdenlive-natron-bridge
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; sleep 1
+nohup ./build/natron-kdenlive-daemon > /tmp/nkb-daemon.out 2>&1 &
+sleep 1
+nohup ./build/nkb-mock-worker --mode invert --delay-ms 600 > /tmp/nkb-worker.out 2>&1 &
+sleep 1
+./build/natron-kdenlive-cache --status | grep -E "^workers="
+./build/natron-kdenlive-cache --clear
+
+# Group D: start Kdenlive (Terminal B)
+~/apps/kdenlive/squashfs-root/AppRun 2>&1 | tee /tmp/kdenlive-out.txt
+
+
+# Group E: set the log marker (Terminal A)
+LOG=~/NatronKdenliveLink/logs/natron-kdenlive.log
+wc -l < $LOG > /tmp/nkb-mark.txt
+cat /tmp/nkb-mark.txt
+
+# Group F: render in Kdenlive (manual).
+
+# Group G: analyze (Terminal A)
+LOG=~/NatronKdenliveLink/logs/natron-kdenlive.log
+tail -n +$(( $(cat /tmp/nkb-mark.txt) + 1 )) $LOG > /tmp/nkb-render-part.log
+echo "--- how the render frames were classified:"
+grep "event=filter_frame" /tmp/nkb-render-part.log | grep -o "mode=[a-z]* export_reason=[a-z_]* consumer=[a-z0-9_]* real_time=[-a-z0-9]* process=[a-z_0-9-]*" | sort | uniq -c
+echo "--- unprocessed export frames (should be 0):"
+grep -c "export_frame_unprocessed" /tmp/nkb-render-part.log
+echo "--- results:"
+grep "event=filter_frame" /tmp/nkb-render-part.log | grep -o "result=[a-z_]*" | sort | uniq -c
+
+# Group H: stop all.
+
+
+
+pkill -9 -f natron-kdenlive-daemon; pkill -9 -f nkb_natron_worker; pkill -9 -f nkb-mock; pkill -9 -f natron_e2e.sh
+pgrep -af "natron-kdenlive-daemon|nkb_natron_worker|nkb-mock|natron_e2e" || echo "all stopped"
+
+
+
+
+
+
+
+# Rerun it. First make sure nothing is left from before:
+pkill -9 -f natron_e2e.sh; pkill -9 -f natron-kdenlive-daemon; pkill -9 -f nkb_natron_worker
+pgrep -af "natron_e2e|natron-kdenlive-daemon|nkb_natron_worker" || echo "all stopped"
+
+# Then unpack, build, and run the snap test. Copy each block separately:
+cd ~/projects-own
+tar -xzf ~/Downloads/kdenlive-natron-bridge-m3.2.tar.gz
+cd kdenlive-natron-bridge
+cmake --build build
+
+mkdir -p ~/nkb-test
+
+NKB_TEST_BASE=$HOME/nkb-test NKB_TEST_TCP=1 bash tests/natron_e2e.sh build snap run natron > /tmp/natron-snap-test.out 2>&1 &
+
+tail -f /tmp/natron-snap-test.out
+
+# The run should end with ALL NATRON WORKER TESTS PASSED after about 40 to 90 seconds.
+# Ctrl-C stops only the tail. To abort the test itself, use pkill -f natron_e2e.sh.
+# Send me the output if anything fails, plus this to show why a worker stopped:
+
+R=$(ls -dt ~/nkb-test/nkb-natron.* | head -1)
+grep -E "worker_stopping|worker_start|worker_connected|job_failed" $R/log.txt | cut -c1-300 | tail -15
+
+
+
+
+# Group 1: STOP ALL
+pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; pkill -f nkb_natron_worker; pkill -f natron_e2e.sh; sleep 1; pgrep -af "natron-kdenlive-daemon|nkb-mock-worker|nkb_natron_worker|natron_e2e" || echo "all stopped"
+
+
+# Group 2: MAKE INVERT COMP
+

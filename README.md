@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.3.2, milestone 3 of 6).** The Kdenlive side works on the author's machine with a test worker that inverts colors. The real Natron worker passes its tests, but the whole chain Kdenlive to Natron and back has not been run together yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.3.2, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -40,7 +40,7 @@ At about 4 frames per second for a trivial 1080p graph, Natron is the limit, not
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake ninja-build git pkg-config libspdlog-dev libfmt-dev libxml2-dev
-git clone https://github.com/<your-user>/natron-kdenlive-link.git
+git clone https://github.com/anttiraisala/natron-kdenlive-link.git
 cd natron-kdenlive-link
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -107,7 +107,7 @@ NatronRenderer -t natron/nkb_natron_worker.py         # Natron tarball
 
 The first time a composition id is used, the worker creates a default pass-through graph `~/NatronKdenliveLink/comps/<comp id>.ntp` (Read node `NKB_Input` connected to Write node `NKB_Output`). Open that file in Natron, add nodes between the two, and save. The worker reloads the file when it changes.
 
-The composition id is the filter's `comp` property, or the file name of its `ntp` property.
+The composition id is the filter's `comp` property, or the file name of its `ntp` property. The easiest way to pick a composition is the **Natron project (.ntp)** file field in the effect panel: choose a file in `~/NatronKdenliveLink/comps/`, and the worker uses it from the next frame on.
 
 ### Stopping things
 
@@ -172,6 +172,8 @@ Verified on the author's machine (Ubuntu 24.04.4):
 * Build and all tests of the daemon, protocol, cache and tools.
 * The filter built against MLT 7.40.0 loads in the Kdenlive 26.08.1 AppImage (MLT 7.41.0), appears in the effects list, processes playback and renders with the test worker, and passes frames through immediately when no worker is connected.
 * Natron 2.5.0 snap: the worker connects over loopback TCP, reads and writes its exchange files, creates the default composition, and the first test section (pass-through, cache) passes.
+* **Milestone 4, the real chain:** Kdenlive 26.08.1 (AppImage) with the real worker in the Natron 2.5.0 snap, 1080p. In one session, 1365 preview frames went through the filter (1099 from the cache, the rest rendered by Natron or passed through while a render was still running) and a Kdenlive render of 78 frames was recognised as an export and fully processed (no `export_frame_unprocessed`). 338 Natron jobs, none failed, about 180 ms per frame.
+* Choosing a composition with the effect panel's **Natron project (.ntp)** field, switching between compositions, and editing a composition in the Natron GUI while the worker runs (the worker reloads the saved file and the new result shows up).
 
 Verified only in the author's development container:
 
@@ -179,8 +181,6 @@ Verified only in the author's development container:
 
 Not verified yet:
 
-* The real worker driven from a real Kdenlive session.
-* The effect panel's parameter fields in Kdenlive.
 * The complete worker test on the Natron snap with the 0.3.2 test script (an earlier script had a timing race).
 * Other Kdenlive, MLT or Natron versions, the Kdenlive snap, and other distributions.
 
@@ -196,8 +196,8 @@ Not verified yet:
 
 1. Daemon, protocol, cache, tools, test clients (done)
 2. MLT filter and Kdenlive effect (done)
-3. Natron worker (done in tests; snap re-test pending)
-4. Real end-to-end in Kdenlive; creating and opening compositions from the project
+3. Natron worker (done)
+4. Real end-to-end in Kdenlive with the Natron worker (done); creating and opening compositions from the Kdenlive project, with the compositions next to the project file (not started)
 5. Natron parameters and keyframes through Kdenlive's effect panel
 6. Nested compositions with cascading invalidation, more pixel formats, disk cache
 
@@ -212,7 +212,15 @@ tools/            cache tool, doctor, test clients, install-filter.sh
 data/kdenlive/    effect description for Kdenlive
 tests/            unit, end-to-end, filter and Natron worker tests
 docs/             detailed reference
+dev-memos/        the developer's own notes and example compositions (see below)
 ```
+
+## Developer memos
+
+The folder [`dev-memos/`](dev-memos/) holds the developer's own working notes. They are kept in the repository so that they are available to everybody, but they are memos, not maintained documentation, and they may be out of date or specific to the author's machine:
+
+* [`dev-memos/rd.txt`](dev-memos/rd.txt): the commands the author used to install the build packages and to build MLT 7.40.0 into `~/projects-own/kdenlive-natron-bridge/third-party` (the project's old folder name).
+* [`dev-memos/comps/`](dev-memos/comps/): example Natron compositions from the author's tests. `comp.ntp` is the default pass-through graph the worker creates (`NKB_Input` -> `NKB_Output`); `invert_rgb.ntp` and `invert_rgb2.ntp` invert the colors. To try one, copy it to `~/NatronKdenliveLink/comps/` and select it in the effect panel. The files contain the author's home path in Natron's project-path setting; Natron ignores a path that does not exist.
 
 ## Uninstall
 
@@ -224,6 +232,6 @@ rm -rf ~/NatronKdenliveLink                      # config, token, logs, composit
 
 ## License
 
-MIT, see [LICENSE](LICENSE). You may use, copy, modify, fork, sell and redistribute this software, including in commercial products. The one condition is that the copyright notice and the license text stay with copies and substantial portions of it.
+GPL-3.0-or-later, see [LICENSE](LICENSE). You may use, study, modify and redistribute this software, including commercially. If you distribute it, or a modified version, you must do so under the same license and make the source code available.
 
 This project builds on other software that keeps its own licenses: Kdenlive and Natron (GPL), MLT (the framework library is LGPL), spdlog and fmt (MIT). Nothing from Kdenlive or Natron is copied into this repository; the project talks to them through MLT's plugin interface and Natron's Python scripting.
