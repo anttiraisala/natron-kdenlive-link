@@ -760,11 +760,31 @@
 				<MasterIsAlias>0</MasterIsAlias>
 				<item>
 					<Enabled>1</Enabled>
-					<HasAnimation>0</HasAnimation>
+					<HasAnimation>1</HasAnimation>
+					<Curve class_id="9" tracking_level="0" version="0">
+						<KeyFrameSet class_id="10" tracking_level="0" version="0">
+							<count>2</count>
+							<item_version>0</item_version>
+							<item class_id="11" tracking_level="0" version="0">
+								<Time>0.00000000000000000e+00</Time>
+								<Value>0.00000000000000000e+00</Value>
+								<InterpolationMethod>2</InterpolationMethod>
+								<LeftDerivative>0.00000000000000000e+00</LeftDerivative>
+								<RightDerivative>4.00000000000000008e-02</RightDerivative>
+							</item>
+							<item>
+								<Time>2.50000000000000000e+01</Time>
+								<Value>1.00000000000000000e+00</Value>
+								<InterpolationMethod>2</InterpolationMethod>
+								<LeftDerivative>4.00000000000000008e-02</LeftDerivative>
+								<RightDerivative>0.00000000000000000e+00</RightDerivative>
+							</item>
+						</KeyFrameSet>
+					</Curve>
 					<Value>4.00000000000000008e-02</Value>
 					<Default>1.00000000000000000e+00</Default>
 					<HasMaster>0</HasMaster>
-					<Expression>min(1.0, frame/25.0)</Expression>
+					<Expression></Expression>
 					<ExprHasRet>0</ExprHasRet>
 				</item>
 				<UserKnob>0</UserKnob>
@@ -838,7 +858,7 @@
 					<second>NKB_Input</second>
 				</item>
 			</Inputs_map>
-			<KnobsAge>1</KnobsAge>
+			<KnobsAge>3</KnobsAge>
 			<MasterNode></MasterNode>
 			<HasRotoContext>0</HasRotoContext>
 			<HasTrackerContext>0</HasTrackerContext>
@@ -883,7 +903,7 @@
 		<item>
 			<Enabled>0</Enabled>
 			<HasAnimation>0</HasAnimation>
-			<Value>Sat Oct 3 23:07:16 2026</Value>
+			<Value>Sat Oct 3 23:33:58 2026</Value>
 			<Default></Default>
 			<HasMaster>0</HasMaster>
 			<Expression></Expression>
@@ -895,18 +915,18 @@
 		</StringsAnimation>
 		<UserKnob>0</UserKnob>
 	</item>
-	<AdditionalFormats class_id="9" tracking_level="0" version="0">
+	<AdditionalFormats class_id="12" tracking_level="0" version="0">
 		<count>0</count>
 		<item_version>3</item_version>
 	</AdditionalFormats>
 	<Timeline_current_time>1</Timeline_current_time>
-	<CreationDate>1791068836380</CreationDate>
+	<CreationDate>1791070438424</CreationDate>
 </Project>
-<ProjectGui class_id="10" tracking_level="0" version="12">
-	<NodesGui class_id="11" tracking_level="0" version="0">
+<ProjectGui class_id="13" tracking_level="0" version="12">
+	<NodesGui class_id="14" tracking_level="0" version="0">
 		<count>6</count>
 		<item_version>6</item_version>
-		<item class_id="12" tracking_level="0" version="6">
+		<item class_id="15" tracking_level="0" version="6">
 			<Name>NKB_Input</Name>
 			<X_position>0.00000000000000000e+00</X_position>
 			<Y_position>0.00000000000000000e+00</Y_position>
@@ -991,11 +1011,11 @@
 			<Children>0</Children>
 		</item>
 	</NodesGui>
-	<Gui_Layout class_id="13" tracking_level="0" version="2">
+	<Gui_Layout class_id="16" tracking_level="0" version="2">
 		<NbWindows>1</NbWindows>
-		<Window class_id="14" tracking_level="0" version="1">
+		<Window class_id="17" tracking_level="0" version="1">
 			<ChildType>0</ChildType>
-			<Child class_id="15" tracking_level="1" version="1" object_id="_0">
+			<Child class_id="18" tracking_level="1" version="1" object_id="_0">
 				<Sizes>31 31</Sizes>
 				<Orientation>1</Orientation>
 				<ChildIsSplitter>1</ChildIsSplitter>
@@ -1003,8 +1023,8 @@
 					<Sizes>203 203</Sizes>
 					<Orientation>2</Orientation>
 					<ChildIsSplitter>0</ChildIsSplitter>
-					<Child class_id="16" tracking_level="1" version="5" object_id="_2">
-						<Tabs class_id="17" tracking_level="0" version="0">
+					<Child class_id="19" tracking_level="1" version="5" object_id="_2">
+						<Tabs class_id="20" tracking_level="0" version="0">
 							<count>0</count>
 							<item_version>0</item_version>
 						</Tabs>
@@ -1045,7 +1065,7 @@
 			<h>952</h>
 		</Window>
 	</Gui_Layout>
-	<ViewersData class_id="18" tracking_level="0" version="0">
+	<ViewersData class_id="21" tracking_level="0" version="0">
 		<count>0</count>
 		<item_version>0</item_version>
 	</ViewersData>

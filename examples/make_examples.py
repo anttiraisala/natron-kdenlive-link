@@ -156,7 +156,11 @@ def title(app):
     text.getParam("center").set(106, 225)
     words = merge_over(app, "Text on band", band, text, 450, 150)
     m = merge_over(app, "Fade in title", r, words, 0, 300)
-    expr(m.getParam("mix"), "min(1.0, frame/25.0)")  # 0 at the effect's start, fully visible after 25 frames
+    # Two keyframes (they can be moved in Natron's Curve Editor): fully transparent at the effect's
+    # start, fully visible from frame 25 on.
+    mix = m.getParam("mix")
+    mix.setValueAtTime(0.0, 0)
+    mix.setValueAtTime(1.0, 25)
     save(app, "title", w, m)
 
 

@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.5.4, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.5.5, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -350,6 +350,7 @@ The name is picked when the effect renders its first frame, so the timeline curs
 
 * **The clip's current frame is shown in Natron.** On the click the effect saves the frame it showed last as `<comp>_preview.tga` next to the `.ntp`; Natron opens with `NKB_Input` reading that file and a viewer connected to `NKB_Output`. So the effect must have shown a frame first (the timeline cursor over the clip). Natron marks the project as changed (an `*` in the title) because the file names were set; saving keeps them, and the worker uses its own file names for every frame anyway.
 * **A second click brings the open Natron window to the front** instead of opening it twice. This uses `wmctrl` (`sudo apt install wmctrl`; X11 desktops). Without it the click only logs `natron_raise_failed`.
+* **Auto Previews is turned off.** Open in Natron switches off Natron's node thumbnails (Project Settings > Auto Previews) in the composition before it sets it up: with them on, Natron 2.5.0 hangs for good on graphs that use Python expressions (seen with `examples/title.ntp` and `examples/spinning_picture.ntp`). Natron saves this setting with the project.
 * The daemon starts Natron, so it must be running; Natron's window appears on the display of the terminal the daemon was started from. Natron's own messages go to `~/NatronKdenliveLink/logs/natron-gui.log`.
 * The command is set in `config.ini`, see [Configuration](#configuration); for the Natron tarball set `gui_command` to the tarball's `Natron`.
 

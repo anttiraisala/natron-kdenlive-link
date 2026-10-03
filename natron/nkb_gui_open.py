@@ -16,6 +16,7 @@
 #   * a viewer is connected to NKB_Output and moved to NKB_FRAME, the frame the Kdenlive
 #     effect showed last (counted from the effect's start, as the worker renders it).
 # Changing the file names marks the project as modified; Natron asks before closing.
+# Auto Previews (node thumbnails) is turned off first; see the comment in the code.
 # Paths are set absolute on purpose: Natron itself turns a path inside the project folder
 # into "[Project]/..."; passing "[Project]/..." makes it add the prefix again (2.5.0).
 # Messages start with "NKB_GUI" and end up in <data dir>/logs/natron-gui.log.
@@ -52,6 +53,15 @@ def _nkb_gui_open():
         w.getParam("filename").setValue(stem + "_output.tga")
         app.saveProject(path)
         _nkb_say("created %s" % path)
+    # Node thumbnails off before any parameter is changed. With them on, Natron 2.5.0 renders the
+    # thumbnails on a background thread after each change; a graph with a Python expression (for example
+    # an animated rotation) then needs Python on that thread while this script holds it, and the GUI
+    # hangs for good (reproduced with examples/spinning_picture.ntp). Natron saves this setting with the
+    # project (Project Settings > Auto Previews); node thumbnails are a minor feature.
+    try:
+        app.getProjectParam("autoPreviews").setValue(False)
+    except Exception:
+        _nkb_say("could not turn off Auto Previews")
     r = app.getNode("NKB_Input")
     w = app.getNode("NKB_Output")
     if r is None or w is None:
