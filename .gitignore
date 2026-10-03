@@ -1,3 +1,60 @@
+# ---- Build output (CMake + Ninja) -------------------------------------------
+/build/
+/build-*/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+Testing/
+
+# ---- Third-party sources built locally (MLT 7.40.0, see README) --------------
+/third-party/
+
+# ---- Runtime data: never commit the token, logs or local compositions --------
+# The programs keep these in ~/NatronKdenliveLink, outside the repository. These
+# entries protect against NKB_HOME or test folders pointing inside the checkout.
+/NatronKdenliveLink/
+/logs/
+*.log
+/token
+/exchange/
+/nkb-test/
+nkb-e2e.*/
+nkb-natron.*/
+nkb-fe2e.*/
+worker.stop
+
+# ---- Packaging output ---------------------------------------------------------
+*.tar.gz
+*.tar.xz
+*.zip
+
+# ---- Debugging artefacts --------------------------------------------------------
+core
+core.*
+vgcore.*
+*.core
+callgrind.out.*
+
+# ---- Python (the Natron worker scripts) -----------------------------------------
+__pycache__/
+*.pyc
+
+# ---- Editors and operating systems ------------------------------------------------
+.vscode/
+.idea/
+.cache/
+*.swp
+*~
+.DS_Store
+
+
 # Prerequisites
 *.d
 
