@@ -22,7 +22,8 @@
 //     only playback_timeout_ms. The log line of every frame records which rule fired.
 //
 // COMPOSITION OF AN EFFECT
-//   * "ntp" set (the "Natron project (.ntp)" field in Kdenlive): that file; the
+//   * "ntp" set (the "Natron project (.ntp)" field in Kdenlive): that file, in any
+//     folder; "~/..." means the home folder, a relative name the comps folder. The
 //     composition id is "comp" if set, otherwise the file name without .ntp.
 //   * "comp" set, "ntp" empty: <data dir>/comps/<comp>.ntp.
 //   * both empty (a freshly added effect): the filter gives the effect its own new
@@ -443,6 +444,18 @@ std::string preview_path(const std::string& ntp) {
   return (p.parent_path() / (p.stem().string() + "_preview.tga")).string();
 }
 
+// The ntp field may be typed by hand. "~/x/y.ntp" is taken in the user's home, a
+// relative name ("y.ntp") in the comps folder; the property itself is not changed.
+// The daemon and the worker get an absolute path, whatever their working folder.
+std::string absolute_ntp(const std::string& ntp) {
+  if (ntp.empty() || ntp[0] == '/') return ntp;
+  if (ntp.rfind("~/", 0) == 0) {
+    const char* home = std::getenv("HOME");
+    if (home && *home) return std::string(home) + ntp.substr(1);
+  }
+  return comps_dir() + "/" + ntp;
+}
+
 // Decides the composition of this effect (see COMPOSITION OF AN EFFECT at the top)
 // and gives a new effect its own comp-xxxxxx. Runs under the service lock because
 // several MLT threads can render frames of the same effect at the same time.
@@ -464,6 +477,7 @@ void resolve_comp(mlt_filter filter, Params* p) {
          is_new ? "new_effect" : "ntp_cleared");
   }
   mlt_service_unlock(MLT_FILTER_SERVICE(filter));
+  p->ntp = absolute_ntp(p->ntp);
   if (p->comp.empty()) p->comp = std::filesystem::path(p->ntp).stem().string();
   p->hash_path = !p->ntp.empty() ? p->ntp : comp_file(p->comp);
 }

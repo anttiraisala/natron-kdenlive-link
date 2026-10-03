@@ -148,6 +148,20 @@ grep -q "event=ntp_missing" "$ROOT/log.txt" ; MISSING=$(grep -c "event=ntp_missi
 [ "$MISSING" -le 1 ] && pass "a missing composition file is logged at most once per path ($MISSING)" || fail "ntp_missing logged $MISSING times"
 kill "$WPID" 2>/dev/null; stop_daemon
 
+echo "== a typed ntp: a bare name means the comps folder, ~/ the home folder"
+start_daemon
+: > "$ROOT/log.txt"
+"$CHECK" --frames 1 --start 90 --comp "" --ntp "typed name.ntp" --mode playback --playback-timeout-ms 0 --clicks 1 >/dev/null
+for _ in $(seq 1 30); do grep -q "^gui" "$ROOT/natron_calls.txt" 2>/dev/null && break; sleep 0.1; done
+grep -q "NKB_OPEN=$NKB_HOME/comps/typed name.ntp\$" "$ROOT/natron_calls.txt" 2>/dev/null \
+   && pass "a bare name is taken in the comps folder" || fail "bare name: $(cat "$ROOT/natron_calls.txt" 2>&1)"
+sleep 3; : > "$ROOT/natron_calls.txt"
+HOME="$ROOT/fakehome" "$CHECK" --frames 1 --start 91 --comp "" --ntp "~/proj/natron/t.ntp" --mode playback --playback-timeout-ms 0 --clicks 1 >/dev/null
+for _ in $(seq 1 30); do grep -q "^gui" "$ROOT/natron_calls.txt" 2>/dev/null && break; sleep 0.1; done
+grep -q "NKB_OPEN=$ROOT/fakehome/proj/natron/t.ntp\$" "$ROOT/natron_calls.txt" 2>/dev/null \
+   && pass "~/ is taken in the home folder" || fail "tilde: $(cat "$ROOT/natron_calls.txt" 2>&1)"
+sleep 3; stop_daemon
+
 echo "== Open in Natron (checkbox used as a button)"
 start_daemon
 : > "$ROOT/log.txt"; rm -f "$ROOT/natron_calls.txt"
