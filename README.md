@@ -2,7 +2,7 @@
 
 Use Natron compositions as an effect in Kdenlive, in the style of Adobe Dynamic Link ( as used to link Adobe Premiere with After Effects ). Add the **Natron Link** effect to a clip, build the graph in Natron, and see the result in Kdenlive's preview and in rendered files.
 
-> **Status: early development (version 0.4.2, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
+> **Status: early development (version 0.4.3, milestone 4 of 6).** The whole chain works on the author's machine: Kdenlive (extracted AppImage) sends frames through the daemon to the real worker inside the Natron snap, and the processed frames come back in Kdenlive's preview and in rendered files. Parameters, nested compositions and other pixel formats are not implemented yet. See [Status and verification](#status-and-verification) for exactly what has and has not been tested.
 
 ## What it does
 
@@ -370,7 +370,7 @@ Not verified yet:
 * One Natron project is loaded per worker; alternating compositions every frame is slow (a reload takes 60 to 120 ms).
 * Only RGBA 8-bit frames are supported so far. The protocol already carries other formats.
 * Natron works on premultiplied data. For semi-transparent pixels, use Unpremult, the effect, then Premult. Color precision drops for very low alpha.
-* Natron 2.5.0 quirks the worker works around: a wrong first render after loading a project (it renders a small throw-away frame), color spaces reset whenever a filename changes (it sets them for every job), failed renders that do not raise errors, and a crash at interpreter exit (the worker exits with `os._exit`).
+* Natron 2.5.0 quirks the worker works around: a wrong first render after loading a project (it renders a throw-away frame of the job's size; a tiny one made Natron crash with CornerPin), color spaces reset whenever a filename changes (it sets them for every job), failed renders that do not raise errors, and a crash at interpreter exit (the worker exits with `os._exit`).
 * Copying an effect in Kdenlive may copy its composition name too, so both effects share one composition. Choose another file for one of them if that is not wanted.
 * A Natron project file in a folder other than `~/NatronKdenliveLink/comps/` is not supported yet (see "To use another composition" above).
 * A Kdenlive filter attaches to a clip, a track or the master. It cannot add menus, create tracks or act as a true adjustment layer.

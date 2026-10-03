@@ -246,7 +246,7 @@ class Comp:
         safe = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in comp_id) or "default"
         return os.path.join(self.comps_dir, safe + ".ntp")
 
-    def ensure(self, comp_id):
+    def ensure(self, comp_id, w, h):
         """Returns (read_node, write_node) of the comp, loading or creating it as needed."""
         path = self.path(comp_id)
         if not os.path.exists(path):
@@ -262,7 +262,7 @@ class Comp:
                 self.current = None
                 raise RuntimeError("comp %s has no node named NKB_Input and NKB_Output" % path)
             self._apply_conventions()
-            self._warm_up()
+            self._warm_up(w, h)
             self.current, self.mtime = comp_id, mtime
             log("info", "comp_loaded", comp=comp_id, path=path, reason=reason, load_ms="%.0f" % ((time.time() - t0) * 1000))
         return self.read, self.write
@@ -280,16 +280,19 @@ class Comp:
         self.current = None
         log("info", "comp_created", comp=comp_id, path=path, kind="default pass-through (NKB_Input -> NKB_Output)")
 
-    def _warm_up(self):
-        """Throw-away render of a 16x16 frame right after a load.
+    def _warm_up(self, w, h):
+        """Throw-away render right after a load, at the size of the job's frames.
 
         Observed with Natron 2.5.0: the first render after loadProject() returns wrong colours (up to 192
-        levels off in the tests), every later render is correct. One tiny render first avoids it. The cause
-        is not understood; if it turns out to be unnecessary on some build it only costs about 20 ms per load."""
+        levels off in the tests), every later render is correct. One render first avoids it. The cause is
+        not understood. It used to be a 16x16 frame, but nodes with pixel coordinates (a CornerPin whose
+        "from" corners are those of a 1920x1080 frame) squeeze such a small frame to a sliver, and Natron's
+        TGA writer then crashes (segfault in OpenImageIO, seen on the author's machine and reproduced). At the
+        job's size the warm-up sees the same geometry as the real frames. Costs one render per load."""
         d = self.exchange_dir
         os.makedirs(d, exist_ok=True)
         src, dst = os.path.join(d, "warmup_in.tga"), os.path.join(d, "warmup_out.tga")
-        write_tga(src, 16, 16, bytes(16 * 16 * 4))
+        write_tga(src, w, h, b"\x80\x80\x80\xff" * (w * h))  # opaque mid grey
         self.read.getParam("filename").setValue(src)
         self.write.getParam("filename").setValue(dst)
         self.apply_colorspace()
@@ -300,7 +303,7 @@ class Comp:
                 os.remove(p)
             except OSError:
                 pass
-        log("debug", "warm_up_done", ms="%.0f" % ((time.time() - t0) * 1000))
+        log("debug", "warm_up_done", size="%dx%d" % (w, h), ms="%.0f" % ((time.time() - t0) * 1000))
 
     def _apply_conventions(self):
         r, w = self.read, self.write
@@ -323,7 +326,7 @@ def process_job(comp, exch, fields, payload, keep):
     t0 = time.time()
     if pf != PF_RGBA8 or len(payload) != w * h * 4:
         raise ValueError("only RGBA8 frames are supported by this worker (format=%d, bytes=%d)" % (pf, len(payload)))
-    read, write = comp.ensure(comp_id)
+    read, write = comp.ensure(comp_id, w, h)
     t_load = time.time()
 
     in_path = os.path.join(exch, "in_%d.tga" % job_id)

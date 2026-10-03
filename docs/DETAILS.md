@@ -106,7 +106,7 @@ To abort the test, stop the script, its daemon and its worker together: `pkill -
 | Natron's interpreter at exit | Natron 2.5.0 segfaults while shutting down after a script ends. The worker therefore leaves with `os._exit` after logging. |
 
 Behaviours of Natron 2.5.0 the worker has to work around (each has a test):
-* The first render after `loadProject` returns wrong colours (up to 192 levels off); every later one is right. The worker renders a throw-away 16x16 frame
+* The first render after `loadProject` returns wrong colours (up to 192 levels off); every later one is right. The worker renders a throw-away frame of the job's size
   after each load (about 20 ms). The cause is not understood.
 * Natron re-derives the Read/Write colourspaces from the file type whenever a filename changes, and the "Set" flags do not stop this, so the
   worker sets the colourspaces after the filenames, for every job.
