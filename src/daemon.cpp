@@ -79,6 +79,13 @@ std::vector<std::string> split_words(const std::string& s) {
   return v;
 }
 
+// "exit_code=N" or "signal=N signal_name=\"Aborted\"" for a waitpid() status.
+std::string describe_exit(int status) {
+  if (WIFSIGNALED(status))
+    return "signal=" + std::to_string(WTERMSIG(status)) + " signal_name=\"" + strsignal(WTERMSIG(status)) + "\"";
+  return "exit_code=" + std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+}
+
 std::string join_words(const std::vector<std::string>& v) {
   std::string s;
   for (auto& w : v) s += (s.empty() ? "" : " ") + w;
@@ -266,8 +273,7 @@ class NatronLauncher {
                  join_words(gui_), script_file, log_path_);
     int status = 0;
     waitpid(pid, &status, 0);  // this thread lives as long as the Natron window
-    spdlog::info("event=natron_gui_exited path=\"{}\" pid={} status={}", path, pid,
-                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    spdlog::info("event=natron_gui_exited path=\"{}\" pid={} {}", path, pid, describe_exit(status));
     forget(path);
   }
 
@@ -358,8 +364,7 @@ class WorkerSupervisor {
           return;
         }
         ran_s = ms_since(t0) / 1000.0;
-        const std::string how = WIFSIGNALED(status) ? "signal=" + std::to_string(WTERMSIG(status))
-                                                    : "exit_code=" + std::to_string(WEXITSTATUS(status));
+        const std::string how = describe_exit(status);
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
           // A clean exit is a deliberate stop (<data dir>/worker.stop, NKB_MAX_JOBS): respect it.
           spdlog::info("event=worker_exited pid={} {} ran_s={:.0f} restart=no reason=\"stopped on purpose\"", pid,

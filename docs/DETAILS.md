@@ -41,7 +41,7 @@ This produces `build/libmltnatron.so`.
 
 Terminal 1:
 ```bash
-./build/natron-kdenlive-daemon
+./build/natron-kdenlive-daemon --no-worker      # the test worker replaces Natron here
 ```
 The first start creates the data directory `~/NatronKdenliveLink/` with `config.ini`, `token` (mode 0600) and
 `logs/natron-kdenlive.log`.
@@ -64,6 +64,7 @@ Stop the daemon with Ctrl+C.
 
 `natron/nkb_natron_worker.py` runs inside Natron's own Python (3.10, standard library only) with no window:
 `NatronRenderer -t natron/nkb_natron_worker.py` (tarball) or `snap run natron -t natron/nkb_natron_worker.py` (snap).
+Normally the daemon starts it (`[natron] start_worker`); start it by hand only with `natron-kdenlive-daemon --no-worker`.
 It connects to the daemon as a worker and serves render jobs. Natron's Python API has no call that hands pixels
 over directly, so each frame travels as an image file (uncompressed TGA) in the exchange folder:
 the worker writes the input frame, points the comp's `NKB_Input` Read node at it, renders the `NKB_Output` Write node
@@ -144,7 +145,7 @@ directory. The filter appends to the same log file as the daemon with component 
 # 1. install into the extracted AppImage (the squashfs-root folder), verifies by loading it in the AppImage's melt
 tools/install-filter.sh install /path/to/squashfs-root
 # 2. terminal 1 and 2
-./build/natron-kdenlive-daemon
+./build/natron-kdenlive-daemon --no-worker      # the test worker replaces Natron here
 ./build/nkb-mock-worker --mode invert --delay-ms 100
 # 3. terminal 3: start Kdenlive from the extracted folder
 /path/to/squashfs-root/AppRun
