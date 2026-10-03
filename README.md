@@ -269,7 +269,7 @@ cd ~/projects-own/natron-kdenlive-link
 
 **Each effect gets its own composition.** When a newly added Natron Link effect renders its first frame, it picks a new composition name `comp-xxxxxx` (6 random letters and digits) and sets its **Natron project (.ntp)** field to `~/NatronKdenliveLink/comps/comp-xxxxxx.ntp`. The name is saved with the Kdenlive project. The worker creates that file as a default pass-through graph (Read node `NKB_Input` connected to Write node `NKB_Output`) when it renders the first frame for it. Open the file in the Natron GUI, add nodes between the two, and save. The worker reloads the file when it changes, and Kdenlive shows the new result.
 
-To find out which file belongs to an effect, look for `event=comp_assigned` in the log (`grep comp_assigned ~/NatronKdenliveLink/logs/natron-kdenlive.log`). Kdenlive may show the new path in the effect panel only after the project has been saved and opened again.
+The name is picked when the effect renders its first frame, so the timeline cursor has to be over the clip (or the clip has to be played) once. Kdenlive's effect panel does not show the new path right away, because the panel shows its own copy of the values. To see it, switch the effect off and on again with its enable button (observed with Kdenlive 26.08.1). The log also names it: `grep comp_assigned ~/NatronKdenliveLink/logs/natron-kdenlive.log`.
 
 **To use another composition**, choose a different file in `~/NatronKdenliveLink/comps/` with the **Natron project (.ntp)** field; the worker uses it from the next frame on. Several effects can share one composition this way. If you empty the field, the effect goes back to its own `comp-xxxxxx`. For now the chosen file must be in `~/NatronKdenliveLink/comps/`: the worker loads `comps/<file name>`, not a file in another folder.
 
@@ -277,10 +277,10 @@ To find out which file belongs to an effect, look for `event=comp_assigned` in t
 
 ```bash
 # Folder: any
-pkill -f natron-kdenlive-daemon; pkill -f nkb-mock-worker; pkill -f nkb_natron_worker; sleep 1; pgrep -af "natron-kdenlive-daemon|nkb-mock-worker|nkb_natron_worker" || echo "all stopped"
+pkill -9 -f natron-kdenlive-daemon; pkill -9 -f nkb-mock-worker; pkill -9 -f nkb_natron_worker; sleep 1; pgrep -af "natron-kdenlive-daemon|nkb-mock-worker|nkb_natron_worker" || echo "all stopped"
 ```
 
-It must print `all stopped`. `-f` is required: `pkill` without it compares only the first 15 characters of a process name and does not match `natron-kdenlive-daemon`. If something is still listed, run the same command with `pkill -9 -f` (Natron and `snap run` can ignore the normal signal).
+It must print `all stopped`. `-9` is used because Natron and `snap run` can ignore the normal stop signal; nothing is lost by it, because the daemon keeps its cache only in memory and the worker saves nothing. `-f` is required: `pkill` without it compares only the first 15 characters of a process name and does not match `natron-kdenlive-daemon`. Natron may leave a `<comp>.ntp.lock` file next to a composition; it is harmless.
 
 ## Configuration
 
@@ -332,7 +332,7 @@ When something fails, the log and the output of `natron-kdenlive-doctor` are eno
 
 | Symptom | Cause and fix |
 |---|---|
-| Daemon prints `Address already in use` | An old daemon is still running. Stop it with `pkill -f natron-kdenlive-daemon` |
+| Daemon prints `Address already in use` | An old daemon is still running. Stop it with `pkill -9 -f natron-kdenlive-daemon` |
 | "Natron Link" is not in the effects list | Kdenlive needs the module and the effect XML in the extracted AppImage. Re-run `tools/install-filter.sh install ~/apps/kdenlive/squashfs-root`; start Kdenlive with `~/apps/kdenlive/squashfs-root/AppRun`, not the original `.AppImage`. A log line `Invalid metadata for natron_link` means an old module without MLT metadata |
 | Clip looks unprocessed | Check `./build/natron-kdenlive-cache --status`. `workers=0` means no worker is connected, and frames pass through |
 | Export is unprocessed | Look for `export_frame_unprocessed` in the log. Start the worker before rendering, or raise `no_worker_wait_ms` |

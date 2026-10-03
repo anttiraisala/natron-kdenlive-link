@@ -93,7 +93,7 @@ mkdir -p ~/nkb-test
 NKB_TEST_BASE=$HOME/nkb-test NKB_TEST_TCP=1 bash tests/natron_e2e.sh build snap run natron > /tmp/natron-snap-test.out 2>&1 &
 tail -f /tmp/natron-snap-test.out        # Ctrl+C stops only tail; the test ends with ALL ... PASSED or N ... FAILED
 ```
-To abort the test: `pkill -f natron_e2e.sh` (it stops the daemon and the worker too). If the script is killed with `kill -9`, the worker exits by itself within a few seconds; the daemon then has to be stopped with `pkill -f natron-kdenlive-daemon`.
+To abort the test, stop the script, its daemon and its worker together: `pkill -9 -f "natron_e2e.sh|natron-kdenlive-daemon|nkb_natron_worker"` (this also stops a daemon and worker you started yourself).
 
 ### Spike findings (Natron 2.5.0, Ubuntu 24.04, headless)
 | Question | Result |
