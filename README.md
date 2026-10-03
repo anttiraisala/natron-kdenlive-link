@@ -171,7 +171,7 @@ Verified on the author's machine (Ubuntu 24.04.4):
 
 * Build and all tests of the daemon, protocol, cache and tools.
 * The filter built against MLT 7.40.0 loads in the Kdenlive 26.08.1 AppImage (MLT 7.41.0), appears in the effects list, processes playback and renders with the test worker, and passes frames through immediately when no worker is connected.
-* Natron 2.5.0 snap: the worker connects over loopback TCP, reads and writes its exchange files, creates the default composition, and the first test section (pass-through, cache) passes.
+* Natron 2.5.0 snap: the complete worker test (`tests/natron_e2e.sh` over loopback TCP) passes: pass-through accuracy, cache, Invert graph, reload on file change, warm-up, broken composition and recovery, sRGB mode.
 * **Milestone 4, the real chain:** Kdenlive 26.08.1 (AppImage) with the real worker in the Natron 2.5.0 snap, 1080p. In one session, 1365 preview frames went through the filter (1099 from the cache, the rest rendered by Natron or passed through while a render was still running) and a Kdenlive render of 78 frames was recognised as an export and fully processed (no `export_frame_unprocessed`). 338 Natron jobs, none failed, about 180 ms per frame.
 * Choosing a composition with the effect panel's **Natron project (.ntp)** field, switching between compositions, and editing a composition in the Natron GUI while the worker runs (the worker reloads the saved file and the new result shows up).
 
@@ -181,7 +181,6 @@ Verified only in the author's development container:
 
 Not verified yet:
 
-* The complete worker test on the Natron snap with the 0.3.2 test script (an earlier script had a timing race).
 * Other Kdenlive, MLT or Natron versions, the Kdenlive snap, and other distributions.
 
 ### Known limits
